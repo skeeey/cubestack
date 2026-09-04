@@ -280,35 +280,16 @@ kubectl apply -f https://raw.githubusercontent.com/<org>/<repo>/<tag>/dist/insta
 
 ### Option 2: Helm Chart
 
-> **This repo does NOT use the kubebuilder helm plugin.** The chart lives at
-> `helm/cubestack-operator/` and is generated from `config/` by
-> `hack/update-helm-resources.sh` (see Critical Rules above). Do not run
-> `kubebuilder edit --plugins=helm/*` here.
+The operator ships as a Helm chart at `helm/cubestack-operator/`. The chart's
+static content is generated from `config/` by `hack/update-helm-resources.sh`
+(see Critical Rules above) — do not use the kubebuilder helm plugin and do not
+hand-edit generated chart files.
 
 ```bash
-kubebuilder edit --plugins=helm/v2-alpha                      # Generates dist/chart/ (default)
-kubebuilder edit --plugins=helm/v2-alpha --output-dir=charts  # Generates charts/chart/
+make helm-resources-update  # Regenerate chart resources from config/ after config changes
+helm install cubestack ./helm/cubestack-operator --namespace cubestack-system --create-namespace
+helm uninstall cubestack --namespace cubestack-system   # removes the operator, keeps the CRDs
 ```
-
-**For development:**
-```bash
-make helm-deploy IMG=<registry>/<project>:<tag>          # Deploy manager via Helm
-make helm-deploy IMG=$IMG HELM_EXTRA_ARGS="--set ..."    # Deploy with custom values
-make helm-status                                         # Show release status
-make helm-uninstall                                      # Remove release
-make helm-history                                        # View release history
-make helm-rollback                                       # Rollback to previous version
-```
-
-**For end users/production:**
-```bash
-helm install my-release ./<output-dir>/chart/ --namespace <ns> --create-namespace
-```
-
-**Important:** If you add webhooks or modify manifests after initial chart generation:
-1. Backup any customizations in `<output-dir>/chart/values.yaml` and `<output-dir>/chart/manager/manager.yaml`
-2. Re-run: `kubebuilder edit --plugins=helm/v2-alpha --force` (use same `--output-dir` if customized)
-3. Manually restore your custom values from the backup
 
 ### Publish Container Image
 
