@@ -21,18 +21,19 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - persistentvolumeclaims
+  - endpoints
+  - pods
   verbs:
-  - create
-  - delete
   - get
   - list
   - watch
 - apiGroups:
   - ""
   resources:
-  - pods
+  - persistentvolumeclaims
   verbs:
+  - create
+  - delete
   - get
   - list
   - watch
