@@ -7,4 +7,4 @@ spec:
   modelRef: e2e-model-v1
   profileRef: nvidia-echo-e2e
   overrides:
-    verbosity: 7
+    verbosity: 9

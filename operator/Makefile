@@ -176,6 +176,35 @@ helm-e2e-crd-check: ## Verify CRDs, VAPs and RBAC installed by the chart (phase-
 	fi
 	@echo "helm-e2e-crd-check: OK"
 
+.PHONY: helm-e2e-verify
+helm-e2e-verify: helm-e2e-setup helm-e2e-install ## Full gpu-less happy path: ISVC to Ready=True with rendered-arg assertion
+	@set -e; \
+	KIND_NODE="$$($(KIND) get nodes --name $(KIND_CLUSTER_HELM) 2>/dev/null || echo $(KIND_CLUSTER_HELM)-control-plane)"; \
+	echo "pre-creating the HostPath model directory on the kind node (HostPathDirectory)"; \
+	docker exec $$KIND_NODE mkdir -p /mnt/cubestack-e2e-model; \
+	kubectl create ns demo --dry-run=client -o yaml | kubectl apply -f - >/dev/null; \
+	kubectl apply -f test/e2e/assets/modelversion.yaml >/dev/null; \
+	kubectl apply -f test/e2e/assets/inferenceruntimeprofile.yaml >/dev/null; \
+	kubectl apply -f test/e2e/assets/inferenceservice.yaml >/dev/null; \
+	echo "waiting for the rendered override to reach the pod logs (up to 4m)..."; \
+	POD=""; \
+	for i in $$(seq 1 80); do \
+		for p in $$(kubectl get pods -n demo -l leaderworkerset.sigs.k8s.io/name=e2e-service-router -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do \
+			if kubectl logs -n demo $$p 2>/dev/null | grep -q "ECHO_ARGV:--verbosity=9"; then POD=$$p; break 2; fi; \
+		done; \
+		sleep 3; \
+	done; \
+	[ -n "$$POD" ] || { echo "rendered arg --verbosity=9 not found in any e2e-service-router pod log within 4m"; kubectl get pods -n demo; exit 1; }; \
+	echo "rendered arg asserted in pod $$POD"; \
+	echo "waiting for ISVC Ready (gpu-less, up to 4m)..."; \
+	kubectl wait --for=condition=Ready inferenceservice/e2e-service -n demo --timeout=4m; \
+	echo "condition dump:"; \
+	kubectl get inferenceservice e2e-service -n demo -o jsonpath='{range .status.conditions[*]}{.type}={.status} {end}'; echo; \
+	echo "asserting hostPath volume mount:"; \
+	kubectl get pod -n demo $$POD -o jsonpath='{range .spec.volumes[*]}{.name}={.hostPath.path}{"\n"}{end}' | grep -q "/mnt/cubestack-e2e-model" || { echo "hostPath volume missing"; exit 1; }; \
+	kubectl get endpoints -n demo e2e-service-router -o jsonpath='{.subsets[0].addresses}' | grep -q . || { echo "no ready endpoints"; exit 1; }; \
+	echo "helm-e2e-verify: OK"
+
 .PHONY: helm-e2e-uninstall
 helm-e2e-uninstall: ## Uninstall the helm release; CRDs intentionally remain
 	helm uninstall $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
