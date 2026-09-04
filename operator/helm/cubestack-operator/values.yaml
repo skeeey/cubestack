@@ -1,0 +1,15 @@
+# Default image is a placeholder; the release pipeline overrides it.
+image:
+  repository: example.com/cubestack
+  tag: v0.0.1
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
