@@ -96,6 +96,87 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+# ---- Helm-based e2e (dedicated kind cluster, independent of test-e2e) ----
+KIND_CLUSTER_HELM ?= cubestack-helm-e2e
+HELM_NAMESPACE ?= cubestack-system
+HELM_CHART_DIR ?= helm/cubestack-operator
+ECHO_IMG ?= example.com/cubestack-e2e-echo:v0.0.1
+HELM_RELEASE ?= cubestack
+
+.PHONY: helm-e2e-setup
+helm-e2e-setup: ## Create the dedicated kind cluster for helm e2e if it does not exist
+	@command -v $(KIND) >/dev/null 2>&1 || { echo "Kind is not installed. Please install Kind manually."; exit 1; }
+	@case "$$($(KIND) get clusters)" in \
+		*"$(KIND_CLUSTER_HELM)"*) \
+			echo "Kind cluster '$(KIND_CLUSTER_HELM)' already exists. Skipping creation." ;; \
+		*) \
+			echo "Creating Kind cluster '$(KIND_CLUSTER_HELM)'..."; \
+			$(KIND) create cluster --name $(KIND_CLUSTER_HELM) ;; \
+	esac
+	@echo "Installing gateway-api CRDs (the manager watches Gateway/HTTPRoute/TCPRoute)..." ; \
+	GW_VER="$$(awk '$$1=="sigs.k8s.io/gateway-api" {print $$2}' go.mod)"; \
+	[ -n "$$GW_VER" ] || { echo "sigs.k8s.io/gateway-api not found in go.mod"; exit 1; }; \
+	go mod download sigs.k8s.io/gateway-api; \
+	GW_CRD_DIR="$$(go env GOMODCACHE)/sigs.k8s.io/gateway-api@$${GW_VER}/config/crd/standard"; \
+	[ -d "$$GW_CRD_DIR" ] || { echo "gateway-api CRD dir not found: $${GW_CRD_DIR}"; exit 1; }; \
+	kubectl --context "kind-$(KIND_CLUSTER_HELM)" apply -f "$${GW_CRD_DIR}"
+
+.PHONY: helm-e2e-images
+helm-e2e-images: ## Build and load manager + echo images into the helm kind cluster
+	$(MAKE) docker-build IMG=$(IMG)
+	@if [ -f test/e2e/assets/echo/Dockerfile ]; then \
+		docker build -f test/e2e/assets/echo/Dockerfile -t $(ECHO_IMG) test/e2e/assets/echo; \
+		$(KIND) load docker-image $(ECHO_IMG) --name $(KIND_CLUSTER_HELM); \
+	else \
+		echo "echo image not present yet (created by a later task) — skipping echo build/load"; \
+	fi
+	$(KIND) load docker-image $(IMG) --name $(KIND_CLUSTER_HELM)
+
+.PHONY: helm-e2e-install
+helm-e2e-install: helm-e2e-setup helm-e2e-images manifests generate fmt vet ## Install the operator via helm into the dedicated kind cluster
+	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART_DIR) \
+		--namespace $(HELM_NAMESPACE) --create-namespace \
+		--set image.repository=$(shell echo $(IMG) | cut -d: -f1) \
+		--set image.tag=$(shell echo $(IMG) | cut -d: -f2) \
+		--wait --timeout 5m
+	@echo "manager rollout status:"
+	kubectl rollout status deployment/cubestack-controller-manager -n $(HELM_NAMESPACE) --timeout=3m
+
+.PHONY: helm-e2e-crd-check
+helm-e2e-crd-check: ## Verify CRDs, VAPs and RBAC installed by the chart (phase-1 acceptance)
+	@set -e; \
+	echo "CRDs:"; kubectl get crd | grep -E "ai\.cubestack\.io|leaderworkerset\.x-k8s\.io|disaggregatedset\.x-k8s\.io"; \
+	for crd in devenvironments.ai.cubestack.io inferenceruntimeprofiles.ai.cubestack.io inferenceservices.ai.cubestack.io modelversions.ai.cubestack.io leaderworkersets.leaderworkerset.x-k8s.io disaggregatedsets.disaggregatedset.x-k8s.io disaggregatedsetrolescalers.disaggregatedset.x-k8s.io; do \
+		kubectl get crd $$crd >/dev/null || { echo "MISSING CRD: $$crd"; exit 1; }; \
+	done; \
+	echo "VAPs:"; kubectl get validatingadmissionpolicy | grep -E "modelversions|inferenceservices|inferenceruntimeprofiles"; \
+	echo "RBAC:"; kubectl get clusterrole cubestack-manager-role >/dev/null; \
+	kubectl get clusterrole cubestack-metrics-reader >/dev/null; \
+	kubectl get clusterrolebinding cubestack-manager-rolebinding >/dev/null; \
+	kubectl get sa cubestack-controller-manager -n $(HELM_NAMESPACE) >/dev/null; \
+	echo "schema validation (invalid MV must be rejected):"; \
+	if printf '%s\n' 'apiVersion: ai.cubestack.io/v1alpha1' 'kind: ModelVersion' 'metadata:' '  name: e2e-invalid-should-fail' 'spec:' '  model: x' | kubectl apply -f -; then \
+		echo "ERROR: invalid ModelVersion was accepted — CRD schema not enforced"; \
+		exit 1; \
+	fi
+	@echo "helm-e2e-crd-check: OK"
+
+.PHONY: helm-e2e-uninstall
+helm-e2e-uninstall: ## Uninstall the helm release; CRDs intentionally remain
+	helm uninstall $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
+
+.PHONY: helm-e2e-cleanup
+helm-e2e-cleanup: ## Delete the dedicated kind cluster
+	@$(KIND) delete cluster --name $(KIND_CLUSTER_HELM)
+
+.PHONY: helm-resources-update
+helm-resources-update: ## Regenerate chart resources from config/ sources
+	hack/update-helm-resources.sh
+
+.PHONY: helm-resources-check
+helm-resources-check: ## Fail if chart resources are out of sync with config/ sources
+	hack/update-helm-resources.sh && git diff --exit-code -- helm hack/update-helm-resources.sh || { echo "chart resources out of date — run: make helm-resources-update"; exit 1; }
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
