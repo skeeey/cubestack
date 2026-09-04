@@ -33,6 +33,7 @@ metadata:
 spec:
   policyName: modelversions-ai-cubestack-io
   validationActions: [Deny]
+---
 # L1 validation for InferenceRuntimeProfile per docs/design/isvc/api.md §3.2:
 # - metadata.name must start with <vendor>-<engine>- (CREATE)
 # - spec is immutable (UPDATE)
@@ -114,6 +115,7 @@ metadata:
 spec:
   policyName: inferenceruntimeprofiles-ai-cubestack-io
   validationActions: [Deny]
+---
 # L1 validation for InferenceService per docs/design/isvc/api.md §3.3:
 # - route.modelName is required when route.publish is true (CREATE and UPDATE)
 #
