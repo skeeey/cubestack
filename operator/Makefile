@@ -102,6 +102,19 @@ HELM_NAMESPACE ?= cubestack-system
 HELM_CHART_DIR ?= helm/cubestack-operator
 ECHO_IMG ?= example.com/cubestack-e2e-echo:v0.0.1
 HELM_RELEASE ?= cubestack
+# Manager image for the helm e2e flow. Defaults to a non-latest tag so the
+# kubelet keeps imagePullPolicy=IfNotPresent and runs the kind-loaded image
+# (a `latest` tag would force imagePullPolicy=Always, i.e. a remote pull
+# attempt that ignores the loaded image). Derives from IMG when the caller
+# sets IMG explicitly (command line or environment).
+ifeq ($(origin IMG),file)
+HELM_E2E_IMG ?= example.com/cubestack:v0.0.1
+else
+HELM_E2E_IMG ?= $(IMG)
+endif
+# Split on the LAST colon so registries with a port (reg:5000/img:tag) work.
+HELM_E2E_IMAGE_REPO = $(shell echo '$(HELM_E2E_IMG)' | sed -E 's/:[^:]*$$//')
+HELM_E2E_IMAGE_TAG = $(shell echo '$(HELM_E2E_IMG)' | sed -E 's/^.*://')
 
 .PHONY: helm-e2e-setup
 helm-e2e-setup: ## Create the dedicated kind cluster for helm e2e if it does not exist
@@ -123,21 +136,21 @@ helm-e2e-setup: ## Create the dedicated kind cluster for helm e2e if it does not
 
 .PHONY: helm-e2e-images
 helm-e2e-images: ## Build and load manager + echo images into the helm kind cluster
-	$(MAKE) docker-build IMG=$(IMG)
+	$(MAKE) docker-build IMG=$(HELM_E2E_IMG)
 	@if [ -f test/e2e/assets/echo/Dockerfile ]; then \
 		docker build -f test/e2e/assets/echo/Dockerfile -t $(ECHO_IMG) test/e2e/assets/echo; \
 		$(KIND) load docker-image $(ECHO_IMG) --name $(KIND_CLUSTER_HELM); \
 	else \
 		echo "echo image not present yet (created by a later task) — skipping echo build/load"; \
 	fi
-	$(KIND) load docker-image $(IMG) --name $(KIND_CLUSTER_HELM)
+	$(KIND) load docker-image $(HELM_E2E_IMG) --name $(KIND_CLUSTER_HELM)
 
 .PHONY: helm-e2e-install
 helm-e2e-install: helm-e2e-setup helm-e2e-images manifests generate fmt vet ## Install the operator via helm into the dedicated kind cluster
 	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART_DIR) \
 		--namespace $(HELM_NAMESPACE) --create-namespace \
-		--set image.repository=$(shell echo $(IMG) | cut -d: -f1) \
-		--set image.tag=$(shell echo $(IMG) | cut -d: -f2) \
+		--set image.repository=$(HELM_E2E_IMAGE_REPO) \
+		--set image.tag=$(HELM_E2E_IMAGE_TAG) \
 		--wait --timeout 5m
 	@echo "manager rollout status:"
 	kubectl rollout status deployment/cubestack-controller-manager -n $(HELM_NAMESPACE) --timeout=3m
