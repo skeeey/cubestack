@@ -10,8 +10,6 @@ CHART="${OP}/helm/cubestack-operator"
 TEMPLATES="${CHART}/templates"
 CRDS="${CHART}/crds"
 
-command -v helm >/dev/null || { echo "helm is required (install: https://helm.sh)"; exit 1; }
-
 # --- 1. CRDs: ai CRDs from config/crd/bases (verbatim, unprefixed) ---
 rm -rf "${CRDS}" "${TEMPLATES}"
 mkdir -p "${CRDS}" "${TEMPLATES}"
@@ -46,12 +44,17 @@ if [ ! -x "${OP}/bin/kustomize" ]; then
   make -s -C "${OP}" kustomize
 fi
 OUT="$(mktemp)"
+trap 'rm -f "${OUT}"' EXIT
 "${OP}/bin/kustomize" build "${OP}/config/default" > "${OUT}"
 
 # Rewrite the manager image to values references. The images transformer in
 # config/manager/kustomization.yaml already rewrote controller:latest to
 # example.com/cubestack:v0.0.1 in the build output.
 sed -i 's|^\(\s*\)image: example\.com/cubestack:v0\.0\.1$|\1image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"|' "${OUT}"
+# Fail loudly if the needle above matched nothing (e.g. the images transformer
+# in config/manager/kustomization.yaml changed): a silent no-op would leave a
+# stale hardcoded image in the chart while the drift gate stays green.
+grep -q 'image: "{{ .Values.image' "${OUT}" || { echo "image rewrite no-op'd — update needle in update-helm-resources.sh"; exit 1; }
 # Replace the hardcoded namespace (metadata + binding subjects) with the release ns.
 sed -i 's|namespace: cubestack-system|namespace: {{ .Release.Namespace }}|g' "${OUT}"
 

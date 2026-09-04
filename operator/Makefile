@@ -165,6 +165,7 @@ helm-e2e-crd-check: ## Verify CRDs, VAPs and RBAC installed by the chart (phase-
 		kubectl get crd $$crd >/dev/null || { echo "MISSING CRD: $$crd"; exit 1; }; \
 	done; \
 	echo "VAPs:"; kubectl get validatingadmissionpolicy | grep -E "modelversions|inferenceservices|inferenceruntimeprofiles"; \
+	echo "VAP bindings:"; kubectl get validatingadmissionpolicybinding | grep -E "modelversions|inferenceservices|inferenceruntimeprofiles"; \
 	echo "RBAC:"; kubectl get clusterrole cubestack-manager-role >/dev/null; \
 	kubectl get clusterrole cubestack-metrics-reader >/dev/null; \
 	kubectl get clusterrolebinding cubestack-manager-rolebinding >/dev/null; \
@@ -187,6 +188,9 @@ helm-e2e-verify: helm-e2e-setup helm-e2e-install ## Full gpu-less happy path: IS
 	kubectl apply -f test/e2e/assets/inferenceruntimeprofile.yaml >/dev/null; \
 	kubectl apply -f test/e2e/assets/inferenceservice.yaml >/dev/null; \
 	echo "waiting for the rendered override to reach the pod logs (up to 4m)..."; \
+	# Poll-before-wait is deliberate: the log poll guarantees a pod from this \
+	# spec exists before kubectl wait, which would otherwise early-return on a \
+	# stale Ready=True from a previous spec. Do not reorder. \
 	POD=""; \
 	for i in $$(seq 1 80); do \
 		for p in $$(kubectl get pods -n demo -l leaderworkerset.sigs.k8s.io/name=e2e-service-router -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do \

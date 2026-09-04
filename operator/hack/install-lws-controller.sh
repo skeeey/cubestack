@@ -47,6 +47,10 @@ fi
 MANIFEST_REF="$("${KUSTOMIZE}" build "${LWS_MOD}/config/manager" 2>/dev/null | awk '/^[[:space:]]*image: /{print $2; exit}')"
 MANIFEST_REF="${MANIFEST_REF:-us-central1-docker.pkg.dev/k8s-staging-images/lws/lws:main}"
 
+# NOTE: the pinned v0.10.0 module's own config/manager kustomization sets
+# newTag: main, so when the direct/mirror pull path succeeds the harness runs a
+# mutable `main` controller against v0.10.0 CRDs (nondeterministic). The
+# local-build fallback below is the deterministic path: it builds v0.10.0 source.
 REF=""
 if "${DOCKER}" pull "${MANIFEST_REF}" >/dev/null 2>&1; then
   REF="${MANIFEST_REF}"
@@ -103,6 +107,10 @@ for d in docs:
         out.append(d)
 print("\n---\n".join(out), end="")
 ' > "${OUT}"
+# replace(..., 1) assumes the image ref occurs exactly once in the bundle (true
+# for v0.10.0: one manager Deployment). A future lws bump that duplicates the
+# ref would leave the second occurrence at MANIFEST_REF — an image that cannot
+# be pulled here — which fails loudly at rollout instead of confusingly.
 if [ "${REF}" != "${MANIFEST_REF}" ]; then
   python3 - "${OUT}" "${MANIFEST_REF}" "${REF}" <<'PY'
 import sys

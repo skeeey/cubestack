@@ -52,7 +52,10 @@ helm install cubestack ./helm/cubestack-operator -n cubestack-system \
   --set image.tag=v1.2.3
 ```
 
-`image.pullPolicy` defaults to `IfNotPresent`.
+`image.pullPolicy` is not yet wired into the chart: values.yaml carries the
+key but no template references it, so the Deployment sets no imagePullPolicy
+and the Kubernetes default applies — `IfNotPresent` for tagged images,
+`Always` for `:latest`.
 
 ## Uninstall
 
