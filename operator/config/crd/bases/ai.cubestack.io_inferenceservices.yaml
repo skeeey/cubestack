@@ -264,7 +264,6 @@ spec:
                     type: string
                 required:
                 - name
-                - revision
                 type: object
               roles:
                 description: Roles reports the resolved topology of each role.
