@@ -133,6 +133,8 @@ helm-e2e-setup: ## Create the dedicated kind cluster for helm e2e if it does not
 	GW_CRD_DIR="$$(go env GOMODCACHE)/sigs.k8s.io/gateway-api@$${GW_VER}/config/crd/standard"; \
 	[ -d "$$GW_CRD_DIR" ] || { echo "gateway-api CRD dir not found: $${GW_CRD_DIR}"; exit 1; }; \
 	kubectl --context "kind-$(KIND_CLUSTER_HELM)" apply -f "$${GW_CRD_DIR}"
+	@echo "Provisioning the upstream LeaderWorkerSet controller (image from the pinned lws go module)..." ; \
+	KIND_CLUSTER_HELM="$(KIND_CLUSTER_HELM)" KIND="$(KIND)" KUBECTL="$(KUBECTL)" hack/install-lws-controller.sh
 
 .PHONY: helm-e2e-images
 helm-e2e-images: ## Build and load manager + echo images into the helm kind cluster
