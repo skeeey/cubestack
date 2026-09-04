@@ -42,8 +42,8 @@ helm install cubestack ./helm/cubestack-operator -n cubestack-system --create-na
 
 ### Image overrides
 
-The default image (`example.com/cubestack:v0.0.1`) is a placeholder. Override
-repository and tag with `--set`:
+The default image is `harbor.isuanova.com/suanova/cubestack-operator:latest`
+(the team's registry). Override repository and tag with `--set`:
 
 ```bash
 helm install cubestack ./helm/cubestack-operator -n cubestack-system \
@@ -52,10 +52,12 @@ helm install cubestack ./helm/cubestack-operator -n cubestack-system \
   --set image.tag=v1.2.3
 ```
 
-`image.pullPolicy` is not yet wired into the chart: values.yaml carries the
-key but no template references it, so the Deployment sets no imagePullPolicy
-and the Kubernetes default applies — `IfNotPresent` for tagged images,
-`Always` for `:latest`.
+The Deployment template bakes `imagePullPolicy: IfNotPresent` into the
+manager container (fixed in the template — it is not a values knob). Local
+kind testing therefore works with the `:latest` default: the built image is
+kind-loaded into the cluster, and `IfNotPresent` makes the loaded image win
+over the registry instead of the kubelet's `Always` default for `latest`
+tags triggering a remote pull.
 
 ## Uninstall
 

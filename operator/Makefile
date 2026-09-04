@@ -102,13 +102,13 @@ HELM_NAMESPACE ?= cubestack-system
 HELM_CHART_DIR ?= helm/cubestack-operator
 ECHO_IMG ?= example.com/cubestack-e2e-echo:v0.0.1
 HELM_RELEASE ?= cubestack
-# Manager image for the helm e2e flow. Defaults to a non-latest tag so the
-# kubelet keeps imagePullPolicy=IfNotPresent and runs the kind-loaded image
-# (a `latest` tag would force imagePullPolicy=Always, i.e. a remote pull
-# attempt that ignores the loaded image). Derives from IMG when the caller
-# sets IMG explicitly (command line or environment).
+# Manager image for the helm e2e flow. Defaults to the same registry image as
+# the top-of-file IMG default; the chart Deployment template bakes
+# imagePullPolicy=IfNotPresent, so the kind-loaded image wins over the
+# registry even for the :latest tag. Derives from IMG when the caller sets
+# IMG explicitly (command line or environment).
 ifeq ($(origin IMG),file)
-HELM_E2E_IMG ?= example.com/cubestack:v0.0.1
+HELM_E2E_IMG ?= harbor.isuanova.com/suanova/cubestack-operator:latest
 else
 HELM_E2E_IMG ?= $(IMG)
 endif

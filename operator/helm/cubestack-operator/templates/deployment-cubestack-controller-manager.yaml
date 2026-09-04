@@ -30,6 +30,7 @@ spec:
         command:
         - /manager
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
             path: /healthz
