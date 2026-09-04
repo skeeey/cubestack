@@ -11,6 +11,9 @@
 # build uses the goproxy.cn mirror because proxy.golang.org is unreachable).
 # The picked image is then loaded into kind so the kubelet runs it locally.
 #
+# When CI is set (GitHub Actions sets CI=true) steps 1-2 are skipped: the
+# pinned module is always built so e2e runs are deterministic.
+#
 # Idempotent: exits early when lws-controller-manager is already Available.
 set -euo pipefail
 
@@ -48,20 +51,28 @@ MANIFEST_REF="$("${KUSTOMIZE}" build "${LWS_MOD}/config/manager" 2>/dev/null | a
 MANIFEST_REF="${MANIFEST_REF:-us-central1-docker.pkg.dev/k8s-staging-images/lws/lws:main}"
 
 # NOTE: the pinned v0.10.0 module's own config/manager kustomization sets
-# newTag: main, so when the direct/mirror pull path succeeds the harness runs a
-# mutable `main` controller against v0.10.0 CRDs (nondeterministic). The
-# local-build fallback below is the deterministic path: it builds v0.10.0 source.
+# newTag: main, so a successful direct/mirror pull runs a mutable `main`
+# controller against v0.10.0 CRDs (nondeterministic, and staging GCs
+# non-release tags so the pull can silently start failing later). The local
+# build of the pinned module is the deterministic path: it builds v0.10.0
+# source. Under CI (any non-empty CI value; GitHub Actions sets CI=true) the
+# pulls are skipped entirely so e2e always runs the pinned v0.10.0 build;
+# local devs on open networks keep the pull fast path.
 REF=""
-if "${DOCKER}" pull "${MANIFEST_REF}" >/dev/null 2>&1; then
+if [ -z "${CI:-}" ] && "${DOCKER}" pull "${MANIFEST_REF}" >/dev/null 2>&1; then
   REF="${MANIFEST_REF}"
   echo "pulled upstream manifest image ${REF}"
-elif "${DOCKER}" pull "docker.1ms.run/${MANIFEST_REF}" >/dev/null 2>&1; then
+elif [ -z "${CI:-}" ] && "${DOCKER}" pull "docker.1ms.run/${MANIFEST_REF}" >/dev/null 2>&1; then
   "${DOCKER}" tag "docker.1ms.run/${MANIFEST_REF}" "${MANIFEST_REF}"
   REF="${MANIFEST_REF}"
   echo "pulled docker.1ms.run/${MANIFEST_REF} via mirror, retagged to ${REF}"
 else
   REF="example.com/lws/lws:${LWS_VER}"
-  echo "registry pulls unavailable — building the lws manager locally from the pinned go module as ${REF}"
+  if [ -n "${CI:-}" ]; then
+    echo "CI set: skipping registry pulls — building the pinned lws module locally as ${REF}"
+  else
+    echo "registry pulls unavailable — building the lws manager locally from the pinned go module as ${REF}"
+  fi
   "${DOCKER}" build -t "${REF}" -f - "${LWS_MOD}" <<'DOCKERFILE'
 FROM golang:1.26 AS builder
 # proxy.golang.org is unreachable from this network; mirror the operator
