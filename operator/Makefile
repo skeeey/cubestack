@@ -161,7 +161,7 @@ helm-e2e-install: helm-e2e-setup helm-e2e-images manifests generate fmt vet ## I
 	$(HELM_E2E_KUBECTL) rollout status deployment/cubestack-controller-manager -n $(HELM_NAMESPACE) --timeout=3m
 
 .PHONY: helm-e2e-crd-check
-helm-e2e-crd-check: ## Verify CRDs, VAPs and RBAC installed by the chart (phase-1 acceptance)
+helm-e2e-crd-check: ## Verify chart CRDs plus the prerequisite lws/gateway CRDs, VAPs and RBAC (phase-1 acceptance)
 	@set -e; \
 	echo "CRDs:"; $(HELM_E2E_KUBECTL) get crd | grep -E "ai\.cubestack\.io|leaderworkerset\.x-k8s\.io|disaggregatedset\.x-k8s\.io"; \
 	for crd in devenvironments.ai.cubestack.io inferenceruntimeprofiles.ai.cubestack.io inferenceservices.ai.cubestack.io modelversions.ai.cubestack.io leaderworkersets.leaderworkerset.x-k8s.io disaggregatedsets.disaggregatedset.x-k8s.io disaggregatedsetrolescalers.disaggregatedset.x-k8s.io; do \

@@ -41,16 +41,25 @@ template), so the image loaded into kind wins over the registry even for a
 
 ### What the install provisions
 
-The kind cluster setup (`helm-e2e-setup`) also installs the platform
-prerequisites the operator needs to run and reconcile:
+The kind cluster setup (`helm-e2e-setup`, a dependency of `helm-e2e-install`)
+installs the platform prerequisites the operator needs to run and reconcile
+before the chart is helm-installed:
 
 - the Gateway API CRDs (the manager registers a Gateway/HTTPRoute watch at
   startup and will not boot without them), and
 - the upstream [LeaderWorkerSet](https://github.com/kubernetes-sigs/lws)
   controller at the version pinned in `go.mod` (LWS workloads do not
-  materialize pods without it).
+  materialize pods without it). The controller install applies the pinned lws
+  module's `config/default`, which provides its own
+  `leaderworkerset.x-k8s.io` / `disaggregatedset.x-k8s.io` CRDs.
 
-In a non-kind cluster you must provide both before installing the chart.
+The chart itself ships only the `ai.cubestack.io` CRDs (ModelVersion,
+InferenceRuntimeProfile, InferenceService, DevEnvironment) together with the
+VAPs, RBAC and Deployment for the controller manager; it does not ship the lws
+CRDs.
+
+In a non-kind cluster you must provide both prerequisites before installing the
+chart.
 
 ## Uninstall and cleanup
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Installs the upstream LeaderWorkerSet controller into the helm-e2e kind
-# cluster. The chart ships the LWS CRDs only; without the upstream controller
-# LeaderWorkerSets never materialize pods, so ISVC Ready is unreachable.
+# Installs the upstream LeaderWorkerSet controller AND its
+# leaderworkerset/disaggregatedset CRDs into the helm-e2e kind cluster from the
+# pinned lws module's config/default (the chart ships only the ai.cubestack.io
+# CRDs). Without the controller and its CRDs LeaderWorkerSets never materialize
+# pods, so ISVC Ready is unreachable.
 #
 # The controller image reference in the manifests points at the upstream
 # staging registry, which is unreachable from this network. Image fallback
@@ -97,27 +99,14 @@ fi
 echo "loading ${REF} into kind cluster ${KIND_CLUSTER}"
 "${KIND_BIN}" load docker-image "${REF}" --name "${KIND_CLUSTER}"
 
-# --- render + apply the upstream default, minus CRDs ---
-# The CRDs already exist in the cluster from the chart (same pinned version),
-# so they are skipped: client-side apply of a CRD stamps a
-# last-applied-configuration annotation that can exceed the annotation limit
-# on these large CRDs, and the chart remains the owner of CRD updates.
+# --- render + apply the full upstream default, CRDs included ---
+# The leaderworkerset/disaggregatedset CRDs are part of this install: the
+# chart ships only the ai.cubestack.io CRDs. Server-side apply (below) is
+# required because client-side apply stamps a last-applied-configuration
+# annotation that exceeds the per-object annotation limit on these large CRDs.
 OUT="$(mktemp)"
 trap 'rm -f "${OUT}"' EXIT
-"${KUSTOMIZE}" build "${LWS_MOD}/config/default" |
-  python3 -c '
-import re, sys
-# Drop whole documents whose top-level kind is CustomResourceDefinition
-# (text-level split keeps every other document byte-identical).
-docs = re.split(r"(?m)^---\s*$", sys.stdin.read())
-out = []
-for d in docs:
-    if re.search(r"(?m)^kind:\s*CustomResourceDefinition\s*$", d):
-        continue
-    if d.strip():
-        out.append(d)
-print("\n---\n".join(out), end="")
-' > "${OUT}"
+"${KUSTOMIZE}" build "${LWS_MOD}/config/default" > "${OUT}"
 # replace(..., 1) assumes the image ref occurs exactly once in the bundle (true
 # for v0.10.0: one manager Deployment). A future lws bump that duplicates the
 # ref would leave the second occurrence at MANIFEST_REF — an image that cannot
@@ -131,8 +120,8 @@ open(path, "w").write(s)
 PY
 fi
 
-echo "applying LWS controller manifests to ${CTX}"
-"${KUBECTL}" --context "${CTX}" apply -f "${OUT}"
+echo "applying LWS controller manifests (incl. CRDs) to ${CTX}"
+"${KUBECTL}" --context "${CTX}" apply --server-side -f "${OUT}"
 
 echo "waiting for ${DEPLOY} in ${NS} to be ready..."
 "${KUBECTL}" --context "${CTX}" rollout status deployment/"${DEPLOY}" -n "${NS}" --timeout=300s

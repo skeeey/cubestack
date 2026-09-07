@@ -3,8 +3,10 @@
 The CubeStack operator chart: installs the `ai.cubestack.io` CRDs
 (ModelVersion, InferenceRuntimeProfile, InferenceService, DevEnvironment),
 their L1 validating admission policies (VAPs) and bindings, and the controller
-manager. It also ships the `leaderworkerset.x-k8s.io` / `disaggregatedset.x-k8s.io`
-CRDs, because InferenceService workloads are LeaderWorkerSets.
+manager. InferenceService workloads are LeaderWorkerSets, but the chart ships
+only the `ai.cubestack.io` CRDs — the `leaderworkerset.x-k8s.io` /
+`disaggregatedset.x-k8s.io` CRDs come with the upstream LeaderWorkerSet
+controller prerequisite below.
 
 ## Prerequisites
 
@@ -18,12 +20,14 @@ CRDs, because InferenceService workloads are LeaderWorkerSets.
   kubectl apply -f "$(go env GOMODCACHE)/sigs.k8s.io/gateway-api@${GW_VER}/config/crd/standard"
   ```
 
-- The **upstream LeaderWorkerSet controller** running in the cluster. The chart
-  installs the LWS CRDs but not the controller; without it LeaderWorkerSet
-  workloads never materialize pods, so InferenceServices can never reach
-  `Ready=True`. Install it from the pinned lws version in `operator/go.mod`,
-  e.g. via the operator's `make -C operator helm-e2e-setup` (provisions a kind
-  cluster) or the upstream lws release manifests:
+- The **upstream LeaderWorkerSet controller** running in the cluster, which
+  provides the `leaderworkerset.x-k8s.io` / `disaggregatedset.x-k8s.io` CRDs
+  as well as the controller: the manifest below is the pinned lws module's
+  `config/default` and includes its CRDs. Without the controller,
+  LeaderWorkerSet workloads never materialize pods, so InferenceServices can
+  never reach `Ready=True`. Install it from the pinned lws version in
+  `operator/go.mod`, e.g. via the operator's `make -C operator helm-e2e-setup`
+  (provisions a kind cluster) or the upstream lws release manifests:
 
   ```bash
   LWS_VER="$(awk '$1=="sigs.k8s.io/lws" {print $2}' operator/go.mod)"
@@ -67,13 +71,21 @@ helm uninstall cubestack -n cubestack-system
 
 Helm uninstall removes the release's objects (Deployment, RBAC, VAPs, ...) but
 **not the CRDs** — CRDs are cluster-scoped and intentionally left in place so
-custom resources survive a reinstall. Delete them explicitly if you want them
-gone (all custom resources must be removed first):
+custom resources survive a reinstall. Delete the chart's `ai.cubestack.io`
+CRDs explicitly if you want them gone (all custom resources must be removed
+first):
 
 ```bash
 kubectl delete crd modelversions.ai.cubestack.io inferenceruntimeprofiles.ai.cubestack.io \
-  inferenceservices.ai.cubestack.io devenvironments.ai.cubestack.io \
-  leaderworkersets.leaderworkerset.x-k8s.io \
+  inferenceservices.ai.cubestack.io devenvironments.ai.cubestack.io
+```
+
+The `leaderworkerset.x-k8s.io` / `disaggregatedset.x-k8s.io` CRDs belong to the
+LeaderWorkerSet controller prerequisite (see above) rather than the chart;
+delete them only when removing that prerequisite too:
+
+```bash
+kubectl delete crd leaderworkersets.leaderworkerset.x-k8s.io \
   disaggregatedsets.disaggregatedset.x-k8s.io \
   disaggregatedsetrolescalers.disaggregatedset.x-k8s.io
 ```
@@ -81,10 +93,11 @@ kubectl delete crd modelversions.ai.cubestack.io inferenceruntimeprofiles.ai.cub
 ## Generated content — do not hand-edit
 
 Everything under `templates/` and `crds/` is generated from the kustomize
-sources in `operator/config/` and the pinned lws go module by
-`operator/hack/update-helm-resources.sh`:
+sources in `operator/config/` by `operator/hack/update-helm-resources.sh`:
 
-- CRDs: `operator/config/crd/bases` + `sigs.k8s.io/lws@<go.mod version>/config/crd/bases`
+- CRDs: `operator/config/crd/bases` (the chart ships only the `ai.cubestack.io`
+  CRDs; the `leaderworkerset.x-k8s.io` / `disaggregatedset.x-k8s.io` CRDs come
+  with the LeaderWorkerSet controller prerequisite — see above)
 - VAPs: `operator/config/vap/*.yaml` (concatenated with `---` separators)
 - RBAC / Deployment / Service / Role: `kustomize build operator/config/default`
   with namespace and image rewritten to Helm values
