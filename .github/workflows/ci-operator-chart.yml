@@ -73,8 +73,11 @@ jobs:
         working-directory: operator
         run: |
           set -euo pipefail
+          # Single-quote the credentials: Harbor robot account names contain a
+          # literal '$' (robot$<name>) that double quotes would let the shell
+          # expand ($ci → unbound variable under set -u).
           helm registry login harbor.isuanova.com \
-            -u "${{ vars.CI_BOT_NAME }}" -p "${{ secrets.CI_BOT_PASSWORD }}"
+            -u '${{ vars.CI_BOT_NAME }}' -p '${{ secrets.CI_BOT_PASSWORD }}'
       # Push the packaged chart as an OCI artifact. The OCI repository name is
       # deliberately the chart name (cubestack-operator-chart): Harbor serves
       # chart-OCI and image artifacts under the same repo name within a
