@@ -2,7 +2,7 @@
 
 The CubeStack operator manages the `ai.cubestack.io` resources: `ModelVersion`,
 `InferenceRuntimeProfile`, `InferenceService` and `DevEnvironment`. It ships as a
-Helm chart (see [helm/cubestack-operator](helm/cubestack-operator/README.md));
+Helm chart (see [helm/cubestack-operator-chart](helm/cubestack-operator-chart/README.md));
 the `make helm-e2e-*` targets below are the quickest way to install it locally
 and verify it end-to-end on a dedicated kind cluster.
 
@@ -74,5 +74,5 @@ Use `kubectl delete crd <name>` explicitly if you want them gone.
 
 ## Installing via Helm (production-like)
 
-See [helm/cubestack-operator/README.md](helm/cubestack-operator/README.md) for
+See [helm/cubestack-operator-chart/README.md](helm/cubestack-operator-chart/README.md) for
 chart values, CRD lifecycle semantics and the prerequisite install commands.

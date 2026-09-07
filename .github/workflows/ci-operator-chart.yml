@@ -64,7 +64,7 @@ jobs:
       # HEAD first (helm-resources-update dependency) so the pushed artifact
       # always matches the committed sources — the generator fails loudly on
       # errors — and drops any stale tgz before packaging. The tgz lands next
-      # to the chart (helm/cubestack-operator/cubestack-operator-<version>.tgz).
+      # to the chart (helm/cubestack-operator-chart/cubestack-operator-chart-<version>.tgz).
       - name: Package the chart
         working-directory: operator
         run: make helm-package
@@ -75,18 +75,17 @@ jobs:
           set -euo pipefail
           helm registry login harbor.isuanova.com \
             -u "${{ vars.CI_BOT_NAME }}" -p "${{ secrets.CI_BOT_PASSWORD }}"
-      # Push the packaged chart as an OCI artifact. The OCI repository is the
-      # chart name (cubestack-operator) in the same Harbor project (suanova)
-      # that hosts the operator image; Harbor serves chart-OCI and image
-      # artifacts under the same repo name. If a future push errors on a type
-      # conflict, suffix the repo name (e.g. cubestack-operator-chart) and
-      # update the chart README install commands.
+      # Push the packaged chart as an OCI artifact. The OCI repository name is
+      # deliberately the chart name (cubestack-operator-chart): Harbor serves
+      # chart-OCI and image artifacts under the same repo name within a
+      # project, so the chart repo is suffixed -chart to avoid colliding with
+      # the container image repository cubestack-operator in project suanova.
       - name: Push chart to Harbor
         working-directory: operator
         run: |
           set -euo pipefail
           # The OCI version tag is the Chart.yaml version — derive the tgz
           # name from it so a version bump needs no workflow edit.
-          CHART_VERSION="$(helm show chart helm/cubestack-operator | awk '/^version:/{print $2}')"
-          helm push "helm/cubestack-operator/cubestack-operator-${CHART_VERSION}.tgz" \
+          CHART_VERSION="$(helm show chart helm/cubestack-operator-chart | awk '/^version:/{print $2}')"
+          helm push "helm/cubestack-operator-chart/cubestack-operator-chart-${CHART_VERSION}.tgz" \
             oci://harbor.isuanova.com/suanova

@@ -103,7 +103,7 @@ KIND_CLUSTER_HELM ?= cubestack-helm-e2e
 HELM_E2E_KUBECTL = $(KUBECTL) --context kind-$(KIND_CLUSTER_HELM)
 HELM_E2E_HELM = $(HELM) --kube-context kind-$(KIND_CLUSTER_HELM)
 HELM_NAMESPACE ?= cubestack-system
-HELM_CHART_DIR ?= helm/cubestack-operator
+HELM_CHART_DIR ?= helm/cubestack-operator-chart
 ECHO_IMG ?= example.com/cubestack-e2e-echo:v0.0.1
 HELM_RELEASE ?= cubestack
 # Manager image for the helm e2e flow. Defaults to the same registry image as

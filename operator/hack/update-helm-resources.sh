@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerates the static content of helm/cubestack-operator from the kustomize
+# Regenerates the static content of helm/cubestack-operator-chart from the kustomize
 # sources in config/. Idempotent: run after any change under config/ and commit
 # the chart. CI runs this script and fails on git diff (make helm-resources-check).
 #
@@ -13,7 +13,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."          # operator/
 OP="${PWD}"
-CHART="${OP}/helm/cubestack-operator"
+CHART="${OP}/helm/cubestack-operator-chart"
 TEMPLATES="${CHART}/templates"
 
 # Start from an empty templates/ so objects that disappear from the kustomize
