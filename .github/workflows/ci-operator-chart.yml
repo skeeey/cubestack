@@ -11,8 +11,6 @@ name: CI Operator Chart
 on:
   push:
     branches: [main]
-  # Manual publish of the current main chart, for maintainers.
-  workflow_dispatch:
 
 permissions: {}
 
@@ -27,7 +25,7 @@ jobs:
       pull-requests: read
     runs-on: ubuntu-latest
     outputs:
-      chart: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.chart }}
+      chart: ${{ steps.filter.outputs.chart }}
     steps:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -38,8 +36,6 @@ jobs:
       - name: Detect changed paths
         uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         id: filter
-        # Skip the diff on manual dispatch — a manual run always publishes.
-        if: github.event_name != 'workflow_dispatch'
         with:
           filters: |
             chart:
