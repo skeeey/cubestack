@@ -1,0 +1,2 @@
+# Packaged helm chart archives (make helm-package) — never commit the tgz
+*.tgz

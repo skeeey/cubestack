@@ -44,6 +44,18 @@ controller prerequisite below.
 helm install cubestack ./helm/cubestack-operator -n cubestack-system --create-namespace
 ```
 
+### Install from the OCI registry
+
+The chart is published to the team's Harbor registry as an OCI artifact. The
+prerequisites above still apply — gateway-api CRDs and the upstream
+LeaderWorkerSet controller must already be installed (the chart ships the
+`ai.cubestack.io` CRDs only):
+
+```bash
+helm install cubestack oci://harbor.isuanova.com/suanova/cubestack-operator \
+  --version 0.1.0 -n cubestack-system --create-namespace
+```
+
 ### Image overrides
 
 The default image is `harbor.isuanova.com/suanova/cubestack-operator:latest`
@@ -89,6 +101,21 @@ kubectl delete crd leaderworkersets.leaderworkerset.x-k8s.io \
   disaggregatedsets.disaggregatedset.x-k8s.io \
   disaggregatedsetrolescalers.disaggregatedset.x-k8s.io
 ```
+
+## Publishing to Harbor (maintainers)
+
+CI (`.github/workflows/ci-operator-chart.yml`) pushes the chart to
+`oci://harbor.isuanova.com/suanova` automatically on `main` when chart-relevant
+paths change. To publish manually, from `operator/`:
+
+```bash
+make helm-package   # regenerates chart resources from config/, then packages
+helm registry login harbor.isuanova.com -u <CI_BOT_NAME> -p <CI_BOT_PASSWORD>
+helm push helm/cubestack-operator/cubestack-operator-0.1.0.tgz oci://harbor.isuanova.com/suanova
+```
+
+The OCI version tag comes from the Chart.yaml `version` — bump it during the
+release process (re-pushing the same version overwrites the existing tag).
 
 ## Generated content — do not hand-edit
 

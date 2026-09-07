@@ -228,6 +228,13 @@ helm-resources-update: ## Regenerate chart resources from config/ sources
 helm-resources-check: ## Fail if chart resources are out of sync with config/ sources
 	hack/update-helm-resources.sh && git diff --exit-code -- helm hack/update-helm-resources.sh || { echo "chart resources out of date — run: make helm-resources-update"; exit 1; }
 
+.PHONY: helm-package
+helm-package: helm-resources-update ## Package the chart as a tgz next to the chart (distributable artifact)
+	# helm package embeds any pre-existing *.tgz it finds in the chart dir —
+	# drop stale archives first so re-runs stay clean and deterministic.
+	rm -f $(HELM_CHART_DIR)/*.tgz
+	$(HELM) package $(HELM_CHART_DIR) --destination $(HELM_CHART_DIR)
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run

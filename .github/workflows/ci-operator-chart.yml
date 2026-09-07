@@ -1,0 +1,85 @@
+name: CI Operator Chart
+
+# Push-only so the chart publish job never appears in pull request checks —
+# same as the operator image workflow. The chart's static content (templates/,
+# crds/) is generated from config/ by hack/update-helm-resources.sh, so this
+# workflow triggers only on chart-relevant paths: helm/ is the packaged
+# content, config/ and hack/ are its generator inputs, and the Makefile owns
+# the regenerate/package targets. Everything else under operator/ is covered
+# by the image and CI workflows.
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ci-operator-chart-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    outputs:
+      chart: ${{ steps.filter.outputs.chart }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Full history so paths-filter can diff against the base ref without fetching
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Detect changed paths
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
+        id: filter
+        with:
+          filters: |
+            chart:
+              - 'operator/helm/**'
+              - 'operator/config/**'
+              - 'operator/hack/**'
+              - 'operator/Makefile'
+
+  build-push-chart:
+    # Publish the chart as an OCI artifact only when a merge lands on main
+    # with chart-content-relevant changes.
+    needs: changes
+    if: needs.changes.outputs.chart == 'true'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Go
+        uses: ./.github/actions/setup-go
+        with:
+          go-version-file: operator/go.mod
+      # Regenerate the chart from config/ at HEAD so the pushed artifact always
+      # matches the committed sources; the generator fails loudly on errors.
+      # helm is preinstalled on ubuntu-24.04 runners — no install step needed.
+      - name: Regenerate chart resources from config
+        working-directory: operator
+        run: make helm-resources-update
+      - name: Log in to Harbor (helm registry)
+        run: |
+          set -euo pipefail
+          helm registry login harbor.isuanova.com \
+            -u "${{ vars.CI_BOT_NAME }}" -p "${{ secrets.CI_BOT_PASSWORD }}"
+      - name: Package the chart
+        run: helm package operator/helm/cubestack-operator
+      # The OCI repository is the chart name (cubestack-operator) in the same
+      # Harbor project (suanova) that hosts the operator image; Harbor serves
+      # chart-OCI and image artifacts under the same repo name. If a future
+      # push errors on a type conflict, suffix the repo name (e.g.
+      # cubestack-operator-chart) and update the chart README install commands.
+      - name: Push chart to Harbor
+        run: |
+          set -euo pipefail
+          helm push operator/helm/cubestack-operator/cubestack-operator-0.1.0.tgz \
+            oci://harbor.isuanova.com/suanova
