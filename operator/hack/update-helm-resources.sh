@@ -16,6 +16,12 @@ OP="${PWD}"
 CHART="${OP}/helm/cubestack-operator"
 TEMPLATES="${CHART}/templates"
 
+# Start from an empty templates/ so objects that disappear from the kustomize
+# output (or config/vap) have their stale template files removed — the drift
+# gate only sees deletions the regenerator itself produces.
+rm -rf "${TEMPLATES}"
+mkdir -p "${TEMPLATES}"
+
 # --- 1. VAPs: verbatim from config/vap (source of truth, unprefixed) ---
 # Join with explicit "---" separators: each source file is its own multi-doc
 # stream, and without a separator the last doc of one file would merge into

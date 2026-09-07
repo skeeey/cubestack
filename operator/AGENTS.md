@@ -281,12 +281,15 @@ kubectl apply -f https://raw.githubusercontent.com/<org>/<repo>/<tag>/dist/insta
 ### Option 2: Helm Chart
 
 The operator ships as a Helm chart at `helm/cubestack-operator/`. The chart's
-static content is generated from `config/` by `hack/update-helm-resources.sh`
-(see Critical Rules above) — do not use the kubebuilder helm plugin and do not
-hand-edit generated chart files.
+`templates/` and `vap.yaml` are generated from `config/` by
+`hack/update-helm-resources.sh` (see Critical Rules above); the ai CRDs in
+`crds/` are synced from `config/crd/bases` at use time by `make helm-crds-sync`
+— do not use the kubebuilder helm plugin and do not hand-edit generated chart
+files.
 
 ```bash
-make helm-resources-update  # Regenerate chart resources from config/ after config changes
+make helm-resources-update  # Regenerate chart templates/vap.yaml from config/ after config changes
+make helm-crds-sync          # Copy the ai CRDs from config/crd/bases into the chart (crds/ is not committed)
 helm install cubestack ./helm/cubestack-operator --namespace cubestack-system --create-namespace
 helm uninstall cubestack --namespace cubestack-system   # removes the operator, keeps the CRDs
 ```
