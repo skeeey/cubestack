@@ -53,10 +53,10 @@ before the chart is helm-installed:
   module's `config/default`, which provides its own
   `leaderworkerset.x-k8s.io` / `disaggregatedset.x-k8s.io` CRDs.
 
-The chart itself ships only the `ai.cubestack.io` CRDs (ModelVersion,
-InferenceRuntimeProfile, InferenceService, DevEnvironment) together with the
-VAPs, RBAC and Deployment for the controller manager; it does not ship the lws
-CRDs.
+The chart installs the `ai.cubestack.io` CRDs (ModelVersion,
+InferenceRuntimeProfile, InferenceService, DevEnvironment — synced from
+`config/crd/bases` at build time) together with the VAPs, RBAC and Deployment
+for the controller manager; it does not ship the lws CRDs.
 
 In a non-kind cluster you must provide both prerequisites before installing the
 chart.

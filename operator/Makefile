@@ -151,7 +151,7 @@ helm-e2e-images: ## Build and load manager + echo images into the helm kind clus
 	$(KIND) load docker-image $(HELM_E2E_IMG) --name $(KIND_CLUSTER_HELM)
 
 .PHONY: helm-e2e-install
-helm-e2e-install: helm-e2e-setup helm-e2e-images manifests generate fmt vet ## Install the operator via helm into the dedicated kind cluster
+helm-e2e-install: helm-e2e-setup helm-e2e-images manifests helm-crds-sync generate fmt vet ## Install the operator via helm into the dedicated kind cluster
 	$(HELM_E2E_HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART_DIR) \
 		--namespace $(HELM_NAMESPACE) --create-namespace \
 		--set image.repository=$(HELM_E2E_IMAGE_REPO) \
@@ -220,6 +220,12 @@ helm-e2e-uninstall: ## Uninstall the helm release; CRDs intentionally remain
 helm-e2e-cleanup: ## Delete the dedicated kind cluster
 	@$(KIND) delete cluster --name $(KIND_CLUSTER_HELM)
 
+.PHONY: helm-crds-sync
+helm-crds-sync: ## Copy the ai.cubestack.io CRDs from config/crd/bases into the chart (crds/ is not committed)
+	rm -rf $(HELM_CHART_DIR)/crds
+	mkdir -p $(HELM_CHART_DIR)/crds
+	cp config/crd/bases/*.yaml $(HELM_CHART_DIR)/crds/
+
 .PHONY: helm-resources-update
 helm-resources-update: ## Regenerate chart resources from config/ sources
 	hack/update-helm-resources.sh
@@ -229,7 +235,7 @@ helm-resources-check: ## Fail if chart resources are out of sync with config/ so
 	hack/update-helm-resources.sh && git diff --exit-code -- helm hack/update-helm-resources.sh || { echo "chart resources out of date — run: make helm-resources-update"; exit 1; }
 
 .PHONY: helm-package
-helm-package: helm-resources-update ## Package the chart as a tgz next to the chart (distributable artifact)
+helm-package: helm-resources-update helm-crds-sync ## Package the chart as a tgz next to the chart (distributable artifact)
 	# helm package embeds any pre-existing *.tgz it finds in the chart dir —
 	# drop stale archives first so re-runs stay clean and deterministic.
 	rm -f $(HELM_CHART_DIR)/*.tgz

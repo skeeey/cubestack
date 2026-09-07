@@ -3,8 +3,8 @@
 The CubeStack operator chart: installs the `ai.cubestack.io` CRDs
 (ModelVersion, InferenceRuntimeProfile, InferenceService, DevEnvironment),
 their L1 validating admission policies (VAPs) and bindings, and the controller
-manager. InferenceService workloads are LeaderWorkerSets, but the chart ships
-only the `ai.cubestack.io` CRDs — the `leaderworkerset.x-k8s.io` /
+manager. InferenceService workloads are LeaderWorkerSets, but the chart
+installs only the `ai.cubestack.io` CRDs — the `leaderworkerset.x-k8s.io` /
 `disaggregatedset.x-k8s.io` CRDs come with the upstream LeaderWorkerSet
 controller prerequisite below.
 
@@ -40,6 +40,12 @@ controller prerequisite below.
 
 ## Install
 
+From a fresh checkout, run `make -C operator helm-crds-sync` first: the chart
+directory's `crds/` is not committed — it is populated from
+`operator/config/crd/bases` at package/install time (`helm-crds-sync` is a
+prereq of `helm-package` and `helm-e2e-install`, so packaged charts and the
+`helm-e2e-*` flow already contain the CRDs).
+
 ```bash
 helm install cubestack ./helm/cubestack-operator -n cubestack-system --create-namespace
 ```
@@ -48,7 +54,7 @@ helm install cubestack ./helm/cubestack-operator -n cubestack-system --create-na
 
 The chart is published to the team's Harbor registry as an OCI artifact. The
 prerequisites above still apply — gateway-api CRDs and the upstream
-LeaderWorkerSet controller must already be installed (the chart ships the
+LeaderWorkerSet controller must already be installed (the chart installs the
 `ai.cubestack.io` CRDs only):
 
 ```bash
@@ -122,15 +128,20 @@ this section). Re-pushing the same version overwrites the existing tag.
 
 ## Generated content — do not hand-edit
 
-Everything under `templates/` and `crds/` is generated from the kustomize
-sources in `operator/config/` by `operator/hack/update-helm-resources.sh`:
+`templates/` and `vap.yaml` are generated from the kustomize sources in
+`operator/config/` by `operator/hack/update-helm-resources.sh`:
 
-- CRDs: `operator/config/crd/bases` (the chart ships only the `ai.cubestack.io`
-  CRDs; the `leaderworkerset.x-k8s.io` / `disaggregatedset.x-k8s.io` CRDs come
-  with the LeaderWorkerSet controller prerequisite — see above)
 - VAPs: `operator/config/vap/*.yaml` (concatenated with `---` separators)
 - RBAC / Deployment / Service / Role: `kustomize build operator/config/default`
   with namespace and image rewritten to Helm values
+
+The `crds/` directory is NOT stored in the repo — it is populated at package
+or install time by copying `operator/config/crd/bases` into the chart
+(`make -C operator helm-crds-sync`, a prereq of `helm-package` and
+`helm-e2e-install`), so it always matches `config/` by construction. The chart
+installs only the `ai.cubestack.io` CRDs; the `leaderworkerset.x-k8s.io` /
+`disaggregatedset.x-k8s.io` CRDs come with the LeaderWorkerSet controller
+prerequisite — see above.
 
 To change chart content, edit the sources under `operator/config/` and run
 `make -C operator helm-resources-update`, then commit the regenerated chart.
