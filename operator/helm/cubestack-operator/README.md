@@ -114,8 +114,11 @@ helm registry login harbor.isuanova.com -u <CI_BOT_NAME> -p <CI_BOT_PASSWORD>
 helm push helm/cubestack-operator/cubestack-operator-0.1.0.tgz oci://harbor.isuanova.com/suanova
 ```
 
-The OCI version tag comes from the Chart.yaml `version` — bump it during the
-release process (re-pushing the same version overwrites the existing tag).
+The OCI version tag comes from the Chart.yaml `version` — CI derives the
+pushed tgz name from it, so a bump needs no workflow edit. Bump chart versions
+in one commit: update the Chart.yaml `version` **and** the version literals in
+this README (the OCI install `--version` above and the manual push path in
+this section). Re-pushing the same version overwrites the existing tag.
 
 ## Generated content — do not hand-edit
 

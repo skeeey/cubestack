@@ -60,26 +60,33 @@ jobs:
         uses: ./.github/actions/setup-go
         with:
           go-version-file: operator/go.mod
-      # Regenerate the chart from config/ at HEAD so the pushed artifact always
-      # matches the committed sources; the generator fails loudly on errors.
-      # helm is preinstalled on ubuntu-24.04 runners — no install step needed.
-      - name: Regenerate chart resources from config
+      # Package via the make target: it regenerates the chart from config/ at
+      # HEAD first (helm-resources-update dependency) so the pushed artifact
+      # always matches the committed sources — the generator fails loudly on
+      # errors — and drops any stale tgz before packaging. The tgz lands next
+      # to the chart (helm/cubestack-operator/cubestack-operator-<version>.tgz).
+      - name: Package the chart
         working-directory: operator
-        run: make helm-resources-update
+        run: make helm-package
+      # helm is preinstalled on ubuntu-24.04 runners — no install step needed.
       - name: Log in to Harbor (helm registry)
+        working-directory: operator
         run: |
           set -euo pipefail
           helm registry login harbor.isuanova.com \
             -u "${{ vars.CI_BOT_NAME }}" -p "${{ secrets.CI_BOT_PASSWORD }}"
-      - name: Package the chart
-        run: helm package operator/helm/cubestack-operator
-      # The OCI repository is the chart name (cubestack-operator) in the same
-      # Harbor project (suanova) that hosts the operator image; Harbor serves
-      # chart-OCI and image artifacts under the same repo name. If a future
-      # push errors on a type conflict, suffix the repo name (e.g.
-      # cubestack-operator-chart) and update the chart README install commands.
+      # Push the packaged chart as an OCI artifact. The OCI repository is the
+      # chart name (cubestack-operator) in the same Harbor project (suanova)
+      # that hosts the operator image; Harbor serves chart-OCI and image
+      # artifacts under the same repo name. If a future push errors on a type
+      # conflict, suffix the repo name (e.g. cubestack-operator-chart) and
+      # update the chart README install commands.
       - name: Push chart to Harbor
+        working-directory: operator
         run: |
           set -euo pipefail
-          helm push operator/helm/cubestack-operator/cubestack-operator-0.1.0.tgz \
+          # The OCI version tag is the Chart.yaml version — derive the tgz
+          # name from it so a version bump needs no workflow edit.
+          CHART_VERSION="$(helm show chart helm/cubestack-operator | awk '/^version:/{print $2}')"
+          helm push "helm/cubestack-operator/cubestack-operator-${CHART_VERSION}.tgz" \
             oci://harbor.isuanova.com/suanova
