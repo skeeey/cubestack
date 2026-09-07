@@ -2,14 +2,17 @@ name: CI Operator Chart
 
 # Push-only so the chart publish job never appears in pull request checks —
 # same as the operator image workflow. The chart's static content (templates/,
-# crds/) is generated from config/ by hack/update-helm-resources.sh, so this
+# vap.yaml) is generated from config/ by hack/update-helm-resources.sh, so this
 # workflow triggers only on chart-relevant paths: helm/ is the packaged
-# content, config/ and hack/ are its generator inputs, and the Makefile owns
-# the regenerate/package targets. Everything else under operator/ is covered
-# by the image and CI workflows.
+# content, config/ and hack/ are its generator inputs, the Makefile owns the
+# regenerate/package targets, and this workflow file itself is included so a
+# workflow-only fix re-triggers a publish. Everything else under operator/ is
+# covered by the image and CI workflows.
 on:
   push:
     branches: [main]
+  # Manual publish of the current main chart, for maintainers.
+  workflow_dispatch:
 
 permissions: {}
 
@@ -24,7 +27,7 @@ jobs:
       pull-requests: read
     runs-on: ubuntu-latest
     outputs:
-      chart: ${{ steps.filter.outputs.chart }}
+      chart: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.chart }}
     steps:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -35,6 +38,8 @@ jobs:
       - name: Detect changed paths
         uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         id: filter
+        # Skip the diff on manual dispatch — a manual run always publishes.
+        if: github.event_name != 'workflow_dispatch'
         with:
           filters: |
             chart:
@@ -42,6 +47,7 @@ jobs:
               - 'operator/config/**'
               - 'operator/hack/**'
               - 'operator/Makefile'
+              - '.github/workflows/ci-operator-chart.yml'
 
   build-push-chart:
     # Publish the chart as an OCI artifact only when a merge lands on main
