@@ -43,6 +43,7 @@ const (
 	testMemoryMedium    = "Memory"
 	testShmMountPath    = "/dev/shm"
 	testIBHostPath      = "/dev/infiniband"
+	testModelMountPath  = "/workspace/model"
 	testHCAResourceName = "rdma/hca_shared_devices"
 )
 
@@ -124,7 +125,7 @@ func validInferenceRuntimeProfile(name string) *InferenceRuntimeProfile {
 							GPUPerPod: ptrTo(int64(8)),
 						},
 						Mounts: []ModelMount{
-							{Model: "main", At: "/workspace/model", ReadOnly: true},
+							{Model: "main", At: testModelMountPath, ReadOnly: true},
 						},
 					},
 					Service: &RoleService{
@@ -149,7 +150,7 @@ func validInferenceRuntimeProfile(name string) *InferenceRuntimeProfile {
 							GPUPerPod: ptrTo(int64(8)),
 						},
 						Mounts: []ModelMount{
-							{Model: "main", At: "/workspace/model", ReadOnly: true},
+							{Model: "main", At: testModelMountPath, ReadOnly: true},
 						},
 					},
 					Service: &RoleService{
