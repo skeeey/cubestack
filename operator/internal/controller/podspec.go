@@ -138,7 +138,12 @@ func buildPodSpec(pt aiv1alpha1.PodTemplate, isvcName string, model *aiv1alpha1.
 		spec.Volumes = append(spec.Volumes, vol)
 		// Each additional volume is mounted at its declared at path. The mount
 		// is writable (unlike the readOnly model and asset mounts): /dev/shm
-		// tmpfs and hostPath device directories are write targets.
+		// tmpfs and hostPath device directories are write targets. An empty at
+		// only occurs on profiles stored before at became required (the spec is
+		// immutable, so a legacy volume keeps its pre-upgrade unmounted form).
+		if v.At == "" {
+			continue
+		}
 		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, corev1.VolumeMount{
 			Name:      v.Name,
 			MountPath: v.At,

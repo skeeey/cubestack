@@ -34,6 +34,9 @@ const (
 	testRuntimeConfig      = "runtime-config"
 
 	testIBDevicePath = "/dev/infiniband"
+	testShmMountPath = "/dev/shm"
+	testMemoryMedium = "Memory"
+	testShmVolName   = "dshm"
 )
 
 var _ = Describe("buildPodSpec", func() {
@@ -73,6 +76,24 @@ var _ = Describe("buildPodSpec", func() {
 		c := spec.Containers[0]
 		Expect(c.Resources.Requests.Name("nvidia.com/gpu", resource.DecimalSI).String()).To(Equal("1"))
 		Expect(c.Resources.Limits.Name("nvidia.com/gpu", resource.DecimalSI).String()).To(Equal("1"))
+	})
+
+	It("keeps a legacy volume without at as an unmounted volume", func() {
+		// Profiles stored before at became required (upgrade case) carry volumes
+		// without a mount path; the immutable spec cannot be fixed in place, so
+		// the render keeps the volume but skips the empty-path volumeMount.
+		pt := aiv1alpha1.PodTemplate{
+			Image: testEngineImage,
+			Volumes: []aiv1alpha1.Volume{
+				{Name: "legacy-shm", EmptyDir: &aiv1alpha1.EmptyDirVolume{Medium: testMemoryMedium}},
+				{Name: testShmVolName, At: testShmMountPath, EmptyDir: &aiv1alpha1.EmptyDirVolume{Medium: testMemoryMedium}},
+			},
+		}
+		spec := buildPodSpec(pt, "svc", modelHostPath(), aiv1alpha1.AcceleratorVendorMetax)
+		Expect(spec.Volumes).To(HaveLen(2))
+		Expect(spec.Containers[0].VolumeMounts).To(Equal([]corev1.VolumeMount{
+			{Name: testShmVolName, MountPath: testShmMountPath},
+		}))
 	})
 
 	It("maps extendedResources to requests and limits", func() {
@@ -232,7 +253,7 @@ var _ = Describe("buildPodSpec", func() {
 		pt := aiv1alpha1.PodTemplate{
 			Image: testEngineImage,
 			Volumes: []aiv1alpha1.Volume{
-				{Name: "dshm", At: "/dev/shm", EmptyDir: &aiv1alpha1.EmptyDirVolume{Medium: "Memory", SizeLimit: ptrTo(resource.MustParse("8Gi"))}},
+				{Name: testShmVolName, At: testShmMountPath, EmptyDir: &aiv1alpha1.EmptyDirVolume{Medium: testMemoryMedium, SizeLimit: ptrTo(resource.MustParse("8Gi"))}},
 				{Name: "ib", At: testIBDevicePath, HostPath: &aiv1alpha1.HostPathVolume{Path: testIBDevicePath}},
 			},
 			SecurityContext:               &aiv1alpha1.PodSecurityContext{Privileged: ptrTo(true), RunAsUser: ptrTo[int64](1000)},
@@ -256,7 +277,7 @@ var _ = Describe("buildPodSpec", func() {
 		Expect(spec.Volumes[1].HostPath.Type).To(Equal(ptrTo(corev1.HostPathDirectory)))
 		c := spec.Containers[0]
 		Expect(c.VolumeMounts).To(Equal([]corev1.VolumeMount{
-			{Name: "dshm", MountPath: "/dev/shm"},
+			{Name: testShmVolName, MountPath: testShmMountPath},
 			{Name: "ib", MountPath: testIBDevicePath},
 		}))
 		Expect(c.SecurityContext.Privileged).To(Equal(ptrTo(true)))

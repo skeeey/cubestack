@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -343,6 +344,28 @@ var _ = Describe("InferenceRuntimeProfile L1 admission", func() {
 			Expect(err.Error()).To(ContainSubstring("must not collide with cpu, memory or vendor GPU resources"))
 		})
 
+		It("rejects an extendedResources key that is not domain-qualified", func() {
+			setupIRPVAP()
+			defer cleanupIRPVAP()
+
+			irp := validIRPWithMatchingName()
+			irp.Spec.Roles[1].PodTemplate.Resources.ExtendedResources = map[string]int64{"foo": 2}
+			err := k8sClient.Create(ctx, irp)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "expected Invalid error, got: %v", err)
+			Expect(err.Error()).To(ContainSubstring("must be domain-qualified extended resource names"))
+		})
+
+		It("accepts a domain-qualified extendedResources key while the VAP is enforcing", func() {
+			setupIRPVAP()
+			defer cleanupIRPVAP()
+
+			irp := validIRPWithMatchingName()
+			irp.Spec.Roles[1].PodTemplate.Resources.ExtendedResources = map[string]int64{"hpc.example.com/vendor_device": 1}
+			Expect(k8sClient.Create(ctx, irp)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, irp)).To(Succeed())
+		})
+
 		It("rejects an extendedResources key colliding with cpu", func() {
 			setupIRPVAP()
 			defer cleanupIRPVAP()
@@ -373,6 +396,36 @@ var _ = Describe("InferenceRuntimeProfile L1 admission", func() {
 
 			irp := validIRPWithMatchingName()
 			irp.Spec.Roles[1].PodTemplate.Resources.ExtendedResources = map[string]int64{testHCAResourceName: 2}
+			Expect(k8sClient.Create(ctx, irp)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, irp)).To(Succeed())
+		})
+	})
+
+	Context("volumes", func() {
+		It("rejects duplicate at mount paths within a role", func() {
+			setupIRPVAP()
+			defer cleanupIRPVAP()
+
+			irp := validIRPWithMatchingName()
+			irp.Spec.Roles[1].PodTemplate.Volumes = []Volume{
+				{Name: "dshm-a", At: testShmMountPath, EmptyDir: &EmptyDirVolume{Medium: testMemoryMedium}},
+				{Name: "dshm-b", At: testShmMountPath, EmptyDir: &EmptyDirVolume{Medium: testMemoryMedium}},
+			}
+			err := k8sClient.Create(ctx, irp)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "expected Invalid error, got: %v", err)
+			Expect(err.Error()).To(ContainSubstring("must not declare duplicate at mount paths"))
+		})
+
+		It("accepts distinct at mount paths within a role while the VAP is enforcing", func() {
+			setupIRPVAP()
+			defer cleanupIRPVAP()
+
+			irp := validIRPWithMatchingName()
+			irp.Spec.Roles[1].PodTemplate.Volumes = []Volume{
+				{Name: "dshm", At: testShmMountPath, EmptyDir: &EmptyDirVolume{Medium: testMemoryMedium, SizeLimit: ptrTo(resource.MustParse("8Gi"))}},
+				{Name: "ib", At: testIBHostPath, HostPath: &HostPathVolume{Path: testIBHostPath}},
+			}
 			Expect(k8sClient.Create(ctx, irp)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, irp)).To(Succeed())
 		})
