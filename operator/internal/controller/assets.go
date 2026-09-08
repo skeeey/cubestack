@@ -123,18 +123,33 @@ func (r *InferenceServiceReconciler) provisionAssets(ctx context.Context, isvc *
 
 		existing := &corev1.ConfigMap{}
 		err := r.Get(ctx, client.ObjectKey{Name: cm.Name, Namespace: cm.Namespace}, existing)
-		switch {
-		case apierrors.IsNotFound(err):
-			if err := r.Create(ctx, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			if cerr := r.Create(ctx, cm); cerr == nil {
+				// Fresh copy created with the rendered data: nothing to sync.
+				statuses = append(statuses, aiv1alpha1.AssetStatus{
+					Name:   asset.Name,
+					Source: asset.ConfigMapRef.Name,
+					Hash:   cm.Annotations[assetHashAnnotationKey],
+				})
+				continue
+			} else if !apierrors.IsAlreadyExists(cerr) {
+				return nil, cerr
+			}
+			// Lost the create race: a concurrent reconcile created the copy in
+			// between. Fall through to the sync path against the winner's copy
+			// instead of failing the reconcile (self-heals on requeue anyway).
+			if err := r.Get(ctx, client.ObjectKey{Name: cm.Name, Namespace: cm.Namespace}, existing); err != nil {
 				return nil, err
 			}
-		case err != nil:
+		} else if err != nil {
 			return nil, err
+		}
+
 		// Compare the copy's actual data, not the stored hash annotation: an
 		// in-place edit of the data leaves the annotation untouched and must
 		// still be repaired. A same-name foreign ConfigMap must not be
 		// overwritten — only a copy owned by this service may be updated.
-		case assetDataHash(existing.Data) != assetDataHash(cm.Data):
+		if assetDataHash(existing.Data) != assetDataHash(cm.Data) {
 			if err := ensureOwned(existing, isvc.UID); err != nil {
 				return nil, err
 			}
