@@ -28,9 +28,10 @@ import (
 )
 
 const (
-	testEngineImage   = "registry.local/engine:v1"
-	testModelPath     = "/workspace/model"
-	testRuntimeConfig = "runtime-config"
+	testEngineImage        = "registry.local/engine:v1"
+	testModelPath          = "/workspace/model"
+	testBootstrapMountPath = "/opt/bootstrap"
+	testRuntimeConfig      = "runtime-config"
 )
 
 var _ = Describe("buildPodSpec", func() {
@@ -151,7 +152,7 @@ var _ = Describe("buildPodSpec", func() {
 	It("mounts mount-type assets as read-only ConfigMap volumes named asset-<name>", func() {
 		spec := &corev1.PodSpec{Containers: []corev1.Container{{Name: mainContainerName}}}
 		addMountAssetVolumes(spec, "svc-a", []aiv1alpha1.Asset{
-			{Name: "bootstrap", ConfigMapRef: aiv1alpha1.AssetConfigMapRef{Name: "src-bootstrap"}, Mount: &aiv1alpha1.AssetMount{Path: "/opt/bootstrap", Mode: 0755}},
+			{Name: "bootstrap", ConfigMapRef: aiv1alpha1.AssetConfigMapRef{Name: "src-bootstrap"}, Mount: &aiv1alpha1.AssetMount{Path: testBootstrapMountPath, Mode: 0755}},
 			{Name: testRuntimeConfig, ConfigMapRef: aiv1alpha1.AssetConfigMapRef{Name: "src-config"}, EnvFrom: ptrTo(true)},
 			{Name: "certs", ConfigMapRef: aiv1alpha1.AssetConfigMapRef{Name: "src-certs"}, Mount: &aiv1alpha1.AssetMount{Path: "/etc/certs", Mode: 0444}},
 		})
@@ -167,7 +168,7 @@ var _ = Describe("buildPodSpec", func() {
 			}}},
 		}))
 		Expect(spec.Containers[0].VolumeMounts).To(Equal([]corev1.VolumeMount{
-			{Name: "asset-bootstrap", MountPath: "/opt/bootstrap", ReadOnly: true},
+			{Name: "asset-bootstrap", MountPath: testBootstrapMountPath, ReadOnly: true},
 			{Name: "asset-certs", MountPath: "/etc/certs", ReadOnly: true},
 		}))
 	})

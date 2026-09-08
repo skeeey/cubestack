@@ -68,7 +68,7 @@ const (
 func validResolveProfile(name string) *aiv1alpha1.InferenceRuntimeProfile {
 	irp := validInferenceRuntimeProfile(name)
 	irp.Spec.Assets = []aiv1alpha1.Asset{
-		{Name: testAssetName, ConfigMapRef: aiv1alpha1.AssetConfigMapRef{Name: name + "-cm-a"}, Mount: &aiv1alpha1.AssetMount{Path: "/opt/bootstrap", Mode: 0755}},
+		{Name: testAssetName, ConfigMapRef: aiv1alpha1.AssetConfigMapRef{Name: name + "-cm-a"}, Mount: &aiv1alpha1.AssetMount{Path: testBootstrapMountPath, Mode: 0755}},
 		{Name: testRuntimeConfig, ConfigMapRef: aiv1alpha1.AssetConfigMapRef{Name: name + "-cm-b"}, EnvFrom: ptrTo(true)},
 	}
 	for _, cmName := range []string{name + "-cm-a", name + "-cm-b"} {
@@ -1481,7 +1481,7 @@ var _ = Describe("InferenceService controller", func() {
 			name := "isvc-mount-asset"
 			irp := validRenderProfile(name)
 			irp.Spec.Assets = []aiv1alpha1.Asset{
-				{Name: testAssetName, ConfigMapRef: aiv1alpha1.AssetConfigMapRef{Name: name + "-cm"}, Mount: &aiv1alpha1.AssetMount{Path: "/opt/bootstrap", Mode: 0755}},
+				{Name: testAssetName, ConfigMapRef: aiv1alpha1.AssetConfigMapRef{Name: name + "-cm"}, Mount: &aiv1alpha1.AssetMount{Path: testBootstrapMountPath, Mode: 0755}},
 			}
 			Expect(k8sClient.Create(ctx, irp)).To(Succeed())
 			mv := validModelVersion(name + "-mv")
@@ -1519,7 +1519,7 @@ var _ = Describe("InferenceService controller", func() {
 			}))
 			Expect(dep.Spec.Template.Spec.Containers[0].VolumeMounts).To(ContainElement(corev1.VolumeMount{
 				Name:      "asset-" + testAssetName,
-				MountPath: "/opt/bootstrap",
+				MountPath: testBootstrapMountPath,
 				ReadOnly:  true,
 			}))
 		})
