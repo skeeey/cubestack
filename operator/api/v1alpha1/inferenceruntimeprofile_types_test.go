@@ -40,6 +40,7 @@ const (
 	testRefServiceName    = "dsv4-flash-pd"
 
 	testVolumeShmName   = "shm"
+	testMemoryMedium    = "Memory"
 	testShmMountPath    = "/dev/shm"
 	testIBHostPath      = "/dev/infiniband"
 	testHCAResourceName = "rdma/hca_shared_devices"
@@ -205,7 +206,7 @@ var _ = Describe("InferenceRuntimeProfile", func() {
 		It("accepts additional volumes and extendedResources and round-trips the spec", func() {
 			irp := validInferenceRuntimeProfile("irp-volumes")
 			irp.Spec.Roles[1].PodTemplate.Volumes = []Volume{
-				{Name: "dshm", At: testShmMountPath, EmptyDir: &EmptyDirVolume{Medium: "Memory", SizeLimit: ptrTo(resource.MustParse("8Gi"))}},
+				{Name: "dshm", At: testShmMountPath, EmptyDir: &EmptyDirVolume{Medium: testMemoryMedium, SizeLimit: ptrTo(resource.MustParse("8Gi"))}},
 				{Name: "ib", At: testIBHostPath, HostPath: &HostPathVolume{Path: testIBHostPath}},
 			}
 			irp.Spec.Roles[1].PodTemplate.Resources.ExtendedResources = map[string]int64{testHCAResourceName: 2}
