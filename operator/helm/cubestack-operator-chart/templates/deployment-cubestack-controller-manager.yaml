@@ -27,6 +27,15 @@ spec:
         - --metrics-bind-address=:8443
         - --leader-elect
         - --health-probe-bind-address=:8081
+        {{- with .Values.gateway.name }}
+        - --gateway-name={{ . }}
+        {{- end }}
+        {{- with .Values.gateway.namespace }}
+        - --gateway-namespace={{ . }}
+        {{- end }}
+        {{- if .Values.gateway.domain }}
+        - --gateway-domain={{ .Values.gateway.domain }}
+        {{- end }}
         command:
         - /manager
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

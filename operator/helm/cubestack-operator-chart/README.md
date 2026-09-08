@@ -81,6 +81,38 @@ kind-loaded into the cluster, and `IfNotPresent` makes the loaded image win
 over the registry instead of the kubelet's `Always` default for `latest`
 tags triggering a remote pull.
 
+### Gateway configuration (route publishing)
+
+`spec.route.publish: true` on an InferenceService publishes its HTTPRoute to
+the platform Gateway. The manager learns the Gateway through three flags, fed
+by the `gateway.*` values below — one flag per key, and **an empty value
+omits the flag entirely** (keeping the manager's own default):
+
+| Key | Manager flag | Default | Notes |
+|---|---|---|---|
+| `gateway.name` | `--gateway-name` | `cubestack-gateway` | Empty = flag omitted; publishing is disabled (`RouteReady=False`, `GatewayNotConfigured`). |
+| `gateway.namespace` | `--gateway-namespace` | `cubestack-system` | Empty = flag omitted (the manager flag default is `cubestack-system` anyway). |
+| `gateway.domain` | `--gateway-domain` | `""` | Empty = flag omitted. **Set this to enable publishing** — the public hostname of a published service is `<modelName>.<domain>`. |
+
+The `name`/`namespace` defaults follow the platform convention (the same
+`cubestack-gateway` in `cubestack-system` the DevEnvironment controller uses),
+so a standard install only needs the domain:
+
+```bash
+helm install cubestack ./helm/cubestack-operator-chart -n cubestack-system \
+  --create-namespace --set gateway.domain=example.com
+```
+
+Pass `--set` again on `helm upgrade` (or use a `--values` file) — the flags
+are rendered by the chart, so an upgrade never resets them. When upgrading a
+release that was created by an older chart, drop `--reuse-values` (or pass
+the `gateway.*` keys explicitly): reused values are the release's stored
+values and do not pick up these new chart defaults.
+
+The kustomize deployment (`make deploy`) carries the same `--gateway-name` /
+`--gateway-namespace` args in `operator/config/manager/manager.yaml`;
+`--gateway-domain` is left to your overlay there.
+
 ## Uninstall
 
 ```bash

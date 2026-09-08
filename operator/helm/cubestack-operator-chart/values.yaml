@@ -2,6 +2,17 @@ image:
   repository: harbor.isuanova.com/suanova/cubestack-operator
   tag: latest
 
+# Platform Gateway the operator publishes InferenceService routes to
+# (spec.route.publish: true). Each key maps to one manager flag; an empty
+# value omits the flag, keeping the manager default (an empty name or domain
+# leaves publishing off — RouteReady=False, GatewayNotConfigured). Set
+# gateway.domain to enable publishing:
+#   helm install ... --set gateway.domain=example.com
+gateway:
+  name: cubestack-gateway       # --gateway-name
+  namespace: cubestack-system   # --gateway-namespace
+  domain: ""                    # --gateway-domain
+
 replicaCount: 1
 
 resources:
