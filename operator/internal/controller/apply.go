@@ -310,6 +310,9 @@ func (r *InferenceServiceReconciler) desiredWorkload(isvc *aiv1alpha1.InferenceS
 	if rr.UsesCredentials {
 		addCredentialsVolume(&podSpec, isvc.Name)
 	}
+	// Every role gets the mount-type asset ConfigMaps injected (design §4.4);
+	// added before hashing so the volumes are part of the pod hash.
+	addMountAssetVolumes(&podSpec, isvc.Name, profile.Spec.Assets)
 	mountsModel := len(rr.PodTemplate.Mounts) > 0
 	// Hash the labels that are actually written to the pod template: a
 	// podTemplate.labels change must roll out (design §5.1 hashes the rendered

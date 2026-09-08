@@ -778,7 +778,7 @@ env:
 
 - Controller 只读取 `cubestack-system` 中版本化且不可变的源 ConfigMap，不会修改它。渲染 data 后，在服务所在 namespace 创建副本 `<isvc>-<asset 别名>`。
 - 副本的 ownerReference 指向 InferenceService；annotation 记录源名称和 data hash，并在 `status.assets` 中回显。
-- `mount` 类型的副本以 `defaultMode: <mode>` 挂载到声明的路径，对所有 role 生效。
+- `mount` 类型的副本以 `defaultMode: <mode>` 只读挂载到声明的路径，对所有 role 生效。生成的卷名固定为 `asset-<asset 别名>`：`asset-` 是平台保留前缀，`podTemplate.volumes` 不得声明以它开头的卷名（同名卷会在工作负载创建时被 apiserver 拒绝）。
 - `envFrom` 类型的副本作为环境变量注入所有 role 的 Pod。
 - 如果源 ConfigMap 被删除，Controller 会在下一次 reconcile 时设置 `Resolved=False, reason=AssetNotFound`。
 

@@ -130,6 +130,36 @@ func buildPodSpec(pt aiv1alpha1.PodTemplate, isvcName string, model *aiv1alpha1.
 	return spec
 }
 
+// addMountAssetVolumes mounts every profile asset declared with assets[].mount
+// as a read-only ConfigMap volume named asset-<name> backed by the rendered
+// copy <isvc>-<name> (design §4.4: mount assets apply to every role, mounted
+// with defaultMode set to the declared mode). asset- is a reserved volume-name
+// prefix: a podTemplate.volumes entry colliding with it is rejected by the
+// apiserver at workload create time and surfaces as a reconcile error.
+func addMountAssetVolumes(spec *corev1.PodSpec, isvcName string, assets []aiv1alpha1.Asset) {
+	for _, asset := range assets {
+		if asset.Mount == nil {
+			continue
+		}
+		volumeName := fmt.Sprintf("asset-%s", asset.Name)
+		volume := corev1.Volume{
+			Name: volumeName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: fmt.Sprintf("%s-%s", isvcName, asset.Name)},
+					DefaultMode:          ptr(asset.Mount.Mode),
+				},
+			},
+		}
+		spec.Volumes = append(spec.Volumes, volume)
+		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+			Name:      volumeName,
+			MountPath: asset.Mount.Path,
+			ReadOnly:  true,
+		})
+	}
+}
+
 // modelVolumes builds the model volume of each mount (design §4.5): one
 // volume per model key, named model-<key>; v1alpha1 only has main.
 func modelVolumes(mounts []aiv1alpha1.ModelMount, isvcName string, model *aiv1alpha1.ModelVersion) []corev1.Volume {
