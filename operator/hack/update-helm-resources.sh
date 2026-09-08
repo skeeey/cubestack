@@ -84,7 +84,7 @@ awk '
 }
 /^[[:space:]]*- --gateway-namespace=cubestack-system$/ {
   if (gateway_name != 1) { print "--gateway-namespace seen without --gateway-name" > "/dev/stderr"; exit 1 }
-  gateway_namespace = 1
+  if (gateway_namespace++) { print "duplicate --gateway-namespace line in kustomize output" > "/dev/stderr"; exit 1 }
   next
 }
 { print }
@@ -155,9 +155,12 @@ expect_render defaults present '^[[:space:]]*- --gateway-namespace=cubestack-sys
 expect_render defaults absent  '^[[:space:]]*- --gateway-domain='
 # Setting the domain enables route publishing.
 expect_render domain-set present '^[[:space:]]*- --gateway-domain=example\.com$' --set gateway.domain=example.com
-# Emptied name/namespace drop their flags; a custom name is passed verbatim.
+# Emptied name/namespace drop their flags while the other keeps rendering; a
+# custom name is passed verbatim.
 expect_render name-empty absent '^[[:space:]]*- --gateway-name=' --set gateway.name=
 expect_render name-empty present '^[[:space:]]*- --gateway-namespace=cubestack-system$' --set gateway.name=
+expect_render namespace-empty absent '^[[:space:]]*- --gateway-namespace=' --set gateway.namespace=
+expect_render namespace-empty present '^[[:space:]]*- --gateway-name=cubestack-gateway$' --set gateway.namespace=
 expect_render name-custom present '^[[:space:]]*- --gateway-name=my-gateway$' --set gateway.name=my-gateway
 # All three empty: reproduce the unconfigured state (no gateway flags at all).
 expect_render all-empty absent "${GW_ARG}" --set gateway.name= --set gateway.namespace= --set gateway.domain=
