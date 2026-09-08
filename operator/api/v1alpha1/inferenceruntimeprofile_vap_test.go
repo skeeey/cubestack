@@ -318,6 +318,66 @@ var _ = Describe("InferenceRuntimeProfile L1 admission", func() {
 		})
 	})
 
+	Context("extendedResources", func() {
+		It("rejects an extendedResources key colliding with the vendor GPU resource", func() {
+			setupIRPVAP()
+			defer cleanupIRPVAP()
+
+			irp := validIRPWithMatchingName()
+			irp.Spec.Roles[1].PodTemplate.Resources.ExtendedResources = map[string]int64{"metax-tech.com/gpu": 2}
+			err := k8sClient.Create(ctx, irp)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "expected Invalid error, got: %v", err)
+			Expect(err.Error()).To(ContainSubstring("must not collide with cpu, memory or vendor GPU resources"))
+		})
+
+		It("rejects an extendedResources key colliding with the other vendor's GPU resource", func() {
+			setupIRPVAP()
+			defer cleanupIRPVAP()
+
+			irp := validIRPWithMatchingName()
+			irp.Spec.Roles[1].PodTemplate.Resources.ExtendedResources = map[string]int64{"nvidia.com/gpu": 2}
+			err := k8sClient.Create(ctx, irp)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "expected Invalid error, got: %v", err)
+			Expect(err.Error()).To(ContainSubstring("must not collide with cpu, memory or vendor GPU resources"))
+		})
+
+		It("rejects an extendedResources key colliding with cpu", func() {
+			setupIRPVAP()
+			defer cleanupIRPVAP()
+
+			irp := validIRPWithMatchingName()
+			irp.Spec.Roles[1].PodTemplate.Resources.ExtendedResources = map[string]int64{"cpu": 2}
+			err := k8sClient.Create(ctx, irp)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "expected Invalid error, got: %v", err)
+			Expect(err.Error()).To(ContainSubstring("must not collide with cpu, memory or vendor GPU resources"))
+		})
+
+		It("rejects an extendedResources value below one", func() {
+			setupIRPVAP()
+			defer cleanupIRPVAP()
+
+			irp := validIRPWithMatchingName()
+			irp.Spec.Roles[1].PodTemplate.Resources.ExtendedResources = map[string]int64{testHCAResourceName: 0}
+			err := k8sClient.Create(ctx, irp)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "expected Invalid error, got: %v", err)
+			Expect(err.Error()).To(ContainSubstring("extendedResources values must be at least 1"))
+		})
+
+		It("accepts a legal extendedResources map while the VAP is enforcing", func() {
+			setupIRPVAP()
+			defer cleanupIRPVAP()
+
+			irp := validIRPWithMatchingName()
+			irp.Spec.Roles[1].PodTemplate.Resources.ExtendedResources = map[string]int64{testHCAResourceName: 2}
+			Expect(k8sClient.Create(ctx, irp)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, irp)).To(Succeed())
+		})
+	})
+
 	Context("endpoint", func() {
 		It("rejects an endpoint role that does not exist", func() {
 			setupIRPVAP()

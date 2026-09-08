@@ -42,8 +42,9 @@ func vendorResource(vendor aiv1alpha1.AcceleratorVendor) string {
 }
 
 // buildPodSpec converts the rendered platform pod template into a corev1.PodSpec:
-// resources mapping (cpu/memory → requests; gpuPerPod → the vendor's extended
-// resource in requests AND limits), model volume composition (design §4.5),
+// resources mapping (cpu/memory → requests; gpuPerPod and extendedResources →
+// the extended resources in requests AND limits), model volume composition
+// (design §4.5), additional volumes mounted at their declared at path,
 // envFromAssets → envFrom ConfigMap refs (<isvc>-<asset>), hostPort backfill
 // when hostNetwork is enabled. The container is named main.
 func buildPodSpec(pt aiv1alpha1.PodTemplate, isvcName string, model *aiv1alpha1.ModelVersion, vendor aiv1alpha1.AcceleratorVendor) corev1.PodSpec {
@@ -84,6 +85,12 @@ func buildPodSpec(pt aiv1alpha1.PodTemplate, isvcName string, model *aiv1alpha1.
 			container.Resources.Requests[resourceName] = gpu
 			container.Resources.Limits[resourceName] = gpu
 		}
+		for name, n := range pt.Resources.ExtendedResources {
+			resourceName := corev1.ResourceName(name)
+			q := *resource.NewQuantity(n, resource.DecimalSI)
+			container.Resources.Requests[resourceName] = q
+			container.Resources.Limits[resourceName] = q
+		}
 	}
 	if pt.SecurityContext != nil {
 		container.SecurityContext = &corev1.SecurityContext{
@@ -121,11 +128,21 @@ func buildPodSpec(pt aiv1alpha1.PodTemplate, isvcName string, model *aiv1alpha1.
 		vol := corev1.Volume{Name: v.Name}
 		switch {
 		case v.EmptyDir != nil:
-			vol.EmptyDir = &corev1.EmptyDirVolumeSource{}
+			vol.EmptyDir = &corev1.EmptyDirVolumeSource{
+				Medium:    corev1.StorageMedium(v.EmptyDir.Medium),
+				SizeLimit: v.EmptyDir.SizeLimit,
+			}
 		case v.HostPath != nil:
 			vol.HostPath = &corev1.HostPathVolumeSource{Path: v.HostPath.Path, Type: ptr(corev1.HostPathDirectory)}
 		}
 		spec.Volumes = append(spec.Volumes, vol)
+		// Each additional volume is mounted at its declared at path. The mount
+		// is writable (unlike the readOnly model and asset mounts): /dev/shm
+		// tmpfs and hostPath device directories are write targets.
+		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+			Name:      v.Name,
+			MountPath: v.At,
+		})
 	}
 	return spec
 }

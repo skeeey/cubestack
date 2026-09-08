@@ -323,7 +323,9 @@ type ObjectFieldSelector struct {
 	FieldPath string `json:"fieldPath"`
 }
 
-// PodResources specifies CPU, memory and per-Pod GPU requests.
+// PodResources specifies CPU, memory and per-Pod GPU requests. The
+// extendedResources key/value constraints are L1 rules, enforced by the VAP
+// (cross-field map iteration is not expressible within the CRD CEL budget).
 type PodResources struct {
 	// CPU is written to requests.cpu.
 	// +optional
@@ -338,6 +340,13 @@ type PodResources struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	GPUPerPod *int64 `json:"gpuPerPod,omitempty"`
+
+	// ExtendedResources lists additional extended resources, e.g.
+	// rdma/hca_shared_devices, written to both requests and limits like
+	// gpuPerPod. Keys must not collide with cpu, memory or the GPU extended
+	// resource of either supported vendor (handled by the fields above; L1 VAP).
+	// +optional
+	ExtendedResources map[string]int64 `json:"extendedResources,omitempty"`
 }
 
 // PodSecurityContext is the supported subset of a Pod security context.
@@ -373,13 +382,18 @@ type ModelMount struct {
 }
 
 // Volume is a supported subset of Kubernetes Volumes: emptyDir and hostPath.
+// Each volume is mounted into the container at its At path.
 // +kubebuilder:validation:XValidation:rule="(has(self.emptyDir) ? 1 : 0) + (has(self.hostPath) ? 1 : 0) == 1",message="exactly one of emptyDir or hostPath must be set"
 type Volume struct {
 	// Name is the volume name.
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
-	// EmptyDir is an empty directory volume, e.g. for /dev/shm.
+	// At is the in-container mount path of the volume.
+	// +kubebuilder:validation:Pattern="^/"
+	At string `json:"at"`
+
+	// EmptyDir is an empty directory volume, e.g. a Memory-backed /dev/shm.
 	// +optional
 	EmptyDir *EmptyDirVolume `json:"emptyDir,omitempty"`
 
@@ -389,7 +403,17 @@ type Volume struct {
 }
 
 // EmptyDirVolume is an emptyDir volume.
-type EmptyDirVolume struct{}
+type EmptyDirVolume struct {
+	// Medium is the storage medium: "" is the node default (disk), Memory is
+	// tmpfs. An 8Gi Memory-backed /dev/shm fits the vLLM TP>1 SHM transport.
+	// +optional
+	// +kubebuilder:validation:Enum="";Memory
+	Medium string `json:"medium,omitempty"`
+
+	// SizeLimit is the maximum size of the volume.
+	// +optional
+	SizeLimit *resource.Quantity `json:"sizeLimit,omitempty"`
+}
 
 // HostPathVolume is a hostPath volume.
 type HostPathVolume struct {

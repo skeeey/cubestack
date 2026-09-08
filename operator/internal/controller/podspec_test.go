@@ -32,6 +32,8 @@ const (
 	testModelPath          = "/workspace/model"
 	testBootstrapMountPath = "/opt/bootstrap"
 	testRuntimeConfig      = "runtime-config"
+
+	testIBDevicePath = "/dev/infiniband"
 )
 
 var _ = Describe("buildPodSpec", func() {
@@ -71,6 +73,21 @@ var _ = Describe("buildPodSpec", func() {
 		c := spec.Containers[0]
 		Expect(c.Resources.Requests.Name("nvidia.com/gpu", resource.DecimalSI).String()).To(Equal("1"))
 		Expect(c.Resources.Limits.Name("nvidia.com/gpu", resource.DecimalSI).String()).To(Equal("1"))
+	})
+
+	It("maps extendedResources to requests and limits", func() {
+		pt := aiv1alpha1.PodTemplate{
+			Image: testEngineImage,
+			Resources: &aiv1alpha1.PodResources{
+				GPUPerPod:         ptrTo[int64](2),
+				ExtendedResources: map[string]int64{"rdma/hca_shared_devices": 2},
+			},
+		}
+		spec := buildPodSpec(pt, "svc", modelHostPath(), aiv1alpha1.AcceleratorVendorMetax)
+		c := spec.Containers[0]
+		Expect(c.Resources.Requests.Name("rdma/hca_shared_devices", resource.DecimalSI).String()).To(Equal("2"))
+		Expect(c.Resources.Limits.Name("rdma/hca_shared_devices", resource.DecimalSI).String()).To(Equal("2"))
+		Expect(c.Resources.Limits.Name("metax-tech.com/gpu", resource.DecimalSI).String()).To(Equal("2"))
 	})
 
 	It("composes a HostPath model volume", func() {
@@ -215,8 +232,8 @@ var _ = Describe("buildPodSpec", func() {
 		pt := aiv1alpha1.PodTemplate{
 			Image: testEngineImage,
 			Volumes: []aiv1alpha1.Volume{
-				{Name: "shm", EmptyDir: &aiv1alpha1.EmptyDirVolume{}},
-				{Name: "ib", HostPath: &aiv1alpha1.HostPathVolume{Path: "/dev/infiniband"}},
+				{Name: "dshm", At: "/dev/shm", EmptyDir: &aiv1alpha1.EmptyDirVolume{Medium: "Memory", SizeLimit: ptrTo(resource.MustParse("8Gi"))}},
+				{Name: "ib", At: testIBDevicePath, HostPath: &aiv1alpha1.HostPathVolume{Path: testIBDevicePath}},
 			},
 			SecurityContext:               &aiv1alpha1.PodSecurityContext{Privileged: ptrTo(true), RunAsUser: ptrTo[int64](1000)},
 			TerminationGracePeriodSeconds: ptrTo[int64](60),
@@ -231,9 +248,17 @@ var _ = Describe("buildPodSpec", func() {
 		}
 		spec := buildPodSpec(pt, "svc", modelHostPath(), aiv1alpha1.AcceleratorVendorMetax)
 		Expect(spec.Volumes).To(HaveLen(2))
-		Expect(spec.Volumes[0].EmptyDir).NotTo(BeNil())
-		Expect(spec.Volumes[1].HostPath.Path).To(Equal("/dev/infiniband"))
+		Expect(spec.Volumes[0].EmptyDir).To(Equal(&corev1.EmptyDirVolumeSource{
+			Medium:    corev1.StorageMediumMemory,
+			SizeLimit: ptrTo(resource.MustParse("8Gi")),
+		}))
+		Expect(spec.Volumes[1].HostPath.Path).To(Equal(testIBDevicePath))
+		Expect(spec.Volumes[1].HostPath.Type).To(Equal(ptrTo(corev1.HostPathDirectory)))
 		c := spec.Containers[0]
+		Expect(c.VolumeMounts).To(Equal([]corev1.VolumeMount{
+			{Name: "dshm", MountPath: "/dev/shm"},
+			{Name: "ib", MountPath: testIBDevicePath},
+		}))
 		Expect(c.SecurityContext.Privileged).To(Equal(ptrTo(true)))
 		Expect(c.SecurityContext.RunAsUser).To(Equal(ptrTo[int64](1000)))
 		Expect(spec.TerminationGracePeriodSeconds).To(Equal(ptrTo[int64](60)))

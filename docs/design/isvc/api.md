@@ -431,11 +431,11 @@ Controller 将此模板按 `workload.kind` 写入对应位置：`LeaderWorkerSet
 | `command` / `args` | list | — | 支持 `{{ }}` 渲染，也支持运行期的 `$()` 和 `${}` 变量。 |
 | `env[]` | list | L0：`value` 与 `fieldRef` 二选一 | `{name, value}` 或 `{name, fieldRef}`。`value` 支持 `{{ }}` 和 `$()`；后者可引用通过 `envFrom` 注入的环境变量。 |
 | `envFromAssets[]` | list[asset 别名] | — | 将渲染后的指定 ConfigMap 以 `envFrom` 方式注入 Pod。 |
-| `resources` | object | — | `{cpu, memory, gpuPerPod}`。`cpu` 和 `memory` 写入 requests；`gpuPerPod` 按 GPU 厂商映射为扩展资源，并同时写入 requests 和 limits。 |
+| `resources` | object | L1：`extendedResources` 的 key 不得与 `cpu`/`memory`/两厂商 GPU 扩展资源名冲突，值 ≥1（VAP） | `{cpu, memory, gpuPerPod, extendedResources?}`。`cpu` 和 `memory` 写入 requests；`gpuPerPod` 按 GPU 厂商映射为扩展资源，并同时写入 requests 和 limits；`extendedResources`（map[string]int64）的每项按 key 同时写入 requests 和 limits（与 `gpuPerPod` 语义一致），用于 RDMA 等附加扩展资源。 |
 | `securityContext` | object | — | `{privileged?, runAsUser?, runAsGroup?}`。三个字段可分别设置。 |
 | `terminationGracePeriodSeconds` | int | L0：可选，默认 30 | 需要等待连接摘流或 checkpoint 写入时可适当增大。 |
 | `mounts[]` | list | L0：`model` 固定 `main`、`readOnly` 固定 `true` | 模型挂载声明：`{model: main, at: <容器内路径>, readOnly: true}`。Profile 指定容器内挂载位置，ModelVersion 指定模型的存储方式。仅卷类策略（`HostPath`/`Dynamic`/`Static`）声明；`S3` 策略以 URI 消费模型，不声明 `mounts[]`（§4.5）。 |
-| `volumes[]` | list | L0：仅支持 Kubernetes Volume 的受控子集 | 附加卷，例如 shm `emptyDir` 或 InfiniBand `hostPath`。 |
+| `volumes[]` | list | L0：仅支持 Kubernetes Volume 的受控子集；每项 `at` 必填（`^/`），`emptyDir`/`hostPath` 二选一；`emptyDir.medium` 枚举 `""`\|`Memory` | 附加卷，每项 `{name, at, emptyDir{medium?, sizeLimit?} \| hostPath{path}}`。Controller 为每项生成一个 volume 和一个**可写** volumeMount（挂到 `at`，与只读的模型/资产卷不同）。典型用途：`emptyDir{medium: Memory, sizeLimit: 8Gi}` 提供 `/dev/shm`（vLLM TP>1 的 SHM transport 需大于容器默认 64Mi），`hostPath` 挂 InfiniBand 设备。 |
 | `nodeSelector` | map | L0：可选 | 多机使用 HostPath 时，用于限定到已预分发模型的节点池。多个 role 共用的约束可引用 `{{ profile.vars.* }}`。只有管理员明确希望用户决定调度位置时，才应引用 `{{ overrides.* }}`。 |
 | `ports[]` | list | — | 容器端口：`{name, containerPort}`。 |
 | `probes` | object | L0：仅支持 `httpGet` / `tcpSocket` | `startup`、`readiness`、`liveness` 探针，以及 `path`、`port`、`periodSeconds`、`timeoutSeconds`、`failureThreshold`、`initialDelaySeconds`。大模型启动较慢时，应设置足够大的 `failureThreshold`，例如 180。 |
@@ -778,7 +778,7 @@ env:
 
 - Controller 只读取 `cubestack-system` 中版本化且不可变的源 ConfigMap，不会修改它。渲染 data 后，在服务所在 namespace 创建副本 `<isvc>-<asset 别名>`。
 - 副本的 ownerReference 指向 InferenceService；annotation 记录源名称和 data hash，并在 `status.assets` 中回显。
-- `mount` 类型的副本以 `defaultMode: <mode>` 只读挂载到声明的路径，对所有 role 生效。生成的卷名固定为 `asset-<asset 别名>`：`asset-` 是平台保留前缀，`podTemplate.volumes` 不得声明以它开头的卷名（同名卷会在工作负载创建时被 apiserver 拒绝）。
+- `mount` 类型的副本以 `defaultMode: <mode>` 只读挂载到声明的路径，对所有 role 生效。生成的卷名固定为 `asset-<asset 别名>`：`asset-`、`model-` 是平台保留卷名前缀（模型卷 `model-<key>` 与 S3 凭据卷固定名同理），`podTemplate.volumes` 不得声明以它们开头或与平台固定卷名同名的卷名（同名卷会在工作负载创建时被 apiserver 拒绝，报错浮现在工作负载 reconcile 失败中）。
 - `envFrom` 类型的副本作为环境变量注入所有 role 的 Pod。
 - 如果源 ConfigMap 被删除，Controller 会在下一次 reconcile 时设置 `Resolved=False, reason=AssetNotFound`。
 

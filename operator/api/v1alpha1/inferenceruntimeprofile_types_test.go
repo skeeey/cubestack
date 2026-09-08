@@ -22,6 +22,7 @@ import (
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -37,6 +38,11 @@ const (
 	testEndpointPortName  = "http"
 	testRefNamespace      = "project-a"
 	testRefServiceName    = "dsv4-flash-pd"
+
+	testVolumeShmName   = "shm"
+	testShmMountPath    = "/dev/shm"
+	testIBHostPath      = "/dev/infiniband"
+	testHCAResourceName = "rdma/hca_shared_devices"
 )
 
 func validInferenceRuntimeProfile(name string) *InferenceRuntimeProfile {
@@ -196,6 +202,23 @@ var _ = Describe("InferenceRuntimeProfile", func() {
 			Expect(k8sClient.Delete(ctx, irp)).To(Succeed())
 		})
 
+		It("accepts additional volumes and extendedResources and round-trips the spec", func() {
+			irp := validInferenceRuntimeProfile("irp-volumes")
+			irp.Spec.Roles[1].PodTemplate.Volumes = []Volume{
+				{Name: "dshm", At: testShmMountPath, EmptyDir: &EmptyDirVolume{Medium: "Memory", SizeLimit: ptrTo(resource.MustParse("8Gi"))}},
+				{Name: "ib", At: testIBHostPath, HostPath: &HostPathVolume{Path: testIBHostPath}},
+			}
+			irp.Spec.Roles[1].PodTemplate.Resources.ExtendedResources = map[string]int64{testHCAResourceName: 2}
+
+			Expect(k8sClient.Create(ctx, irp)).To(Succeed())
+
+			got := &InferenceRuntimeProfile{}
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: irp.Name}, got)).To(Succeed())
+			Expect(got.Spec).To(Equal(irp.Spec))
+
+			Expect(k8sClient.Delete(ctx, irp)).To(Succeed())
+		})
+
 		//nolint:dupl // status subresource round-trip mirrors the ModelVersion test
 		It("updates status through the status subresource", func() {
 			irp := validInferenceRuntimeProfile("irp-status")
@@ -351,7 +374,7 @@ var _ = Describe("InferenceRuntimeProfile", func() {
 			Entry("volume without emptyDir or hostPath",
 				"irp-invalid-volume-no-source",
 				func(s *InferenceRuntimeProfileSpec) {
-					s.Roles[1].PodTemplate.Volumes = []Volume{{Name: "shm"}}
+					s.Roles[1].PodTemplate.Volumes = []Volume{{Name: testVolumeShmName, At: testShmMountPath}}
 				},
 				"exactly one of emptyDir or hostPath"),
 			Entry("volume with both emptyDir and hostPath",
@@ -359,11 +382,34 @@ var _ = Describe("InferenceRuntimeProfile", func() {
 				func(s *InferenceRuntimeProfileSpec) {
 					s.Roles[1].PodTemplate.Volumes = []Volume{{
 						Name:     "shm",
+						At:       "/dev/shm",
 						EmptyDir: &EmptyDirVolume{},
-						HostPath: &HostPathVolume{Path: "/dev/infiniband"},
+						HostPath: &HostPathVolume{Path: testIBHostPath},
 					}}
 				},
 				"exactly one of emptyDir or hostPath"),
+			Entry("volume missing at",
+				"irp-invalid-volume-no-at",
+				func(s *InferenceRuntimeProfileSpec) {
+					s.Roles[1].PodTemplate.Volumes = []Volume{{Name: testVolumeShmName, EmptyDir: &EmptyDirVolume{}}}
+				},
+				"spec.roles[1].podTemplate.volumes[0].at"),
+			Entry("volume with relative at",
+				"irp-invalid-volume-relative-at",
+				func(s *InferenceRuntimeProfileSpec) {
+					s.Roles[1].PodTemplate.Volumes = []Volume{{Name: testVolumeShmName, At: "dev/shm", EmptyDir: &EmptyDirVolume{}}}
+				},
+				"spec.roles[1].podTemplate.volumes[0].at"),
+			Entry("emptyDir with unsupported medium",
+				"irp-invalid-emptydir-medium",
+				func(s *InferenceRuntimeProfileSpec) {
+					s.Roles[1].PodTemplate.Volumes = []Volume{{
+						Name:     "shm",
+						At:       "/dev/shm",
+						EmptyDir: &EmptyDirVolume{Medium: "Disk"},
+					}}
+				},
+				"Unsupported value"),
 			Entry("probe without httpGet or tcpSocket",
 				"irp-invalid-probe-no-action",
 				func(s *InferenceRuntimeProfileSpec) {
