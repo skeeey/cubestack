@@ -268,6 +268,12 @@ type PodTemplate struct {
 	// +optional
 	Volumes []Volume `json:"volumes,omitempty"`
 
+	// PodAntiAffinity spreads this service's pods across the given topology
+	// domains: no two pods of the service (of any role) may share a domain.
+	// The label selector is fixed by the platform to the service itself.
+	// +optional
+	PodAntiAffinity *PodAntiAffinity `json:"podAntiAffinity,omitempty"`
+
 	// NodeSelector constrains scheduling to the declared node labels, e.g. a
 	// node pool with the pre-distributed model.
 	// +optional
@@ -413,6 +419,17 @@ type EmptyDirVolume struct {
 	// SizeLimit is the maximum size of the volume.
 	// +optional
 	SizeLimit *resource.Quantity `json:"sizeLimit,omitempty"`
+}
+
+// PodAntiAffinity is the supported pod anti-affinity subset: one required
+// term spreading this service's pods across the given topology domains.
+// Declaring it gives the scheduler a hard constraint: no two pods carrying
+// the service label may share a topology domain.
+type PodAntiAffinity struct {
+	// TopologyKey is the domain across which the service's pods must be
+	// spread, e.g. kubernetes.io/hostname.
+	// +kubebuilder:validation:MinLength=1
+	TopologyKey string `json:"topologyKey"`
 }
 
 // HostPathVolume is a hostPath volume.

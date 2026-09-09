@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	aiv1alpha1 "github.com/suanova/cubestack/api/v1alpha1"
@@ -76,6 +77,18 @@ var _ = Describe("buildPodSpec", func() {
 		c := spec.Containers[0]
 		Expect(c.Resources.Requests.Name("nvidia.com/gpu", resource.DecimalSI).String()).To(Equal("1"))
 		Expect(c.Resources.Limits.Name("nvidia.com/gpu", resource.DecimalSI).String()).To(Equal("1"))
+	})
+
+	It("renders the service-wide podAntiAffinity with the platform selector", func() {
+		pt := aiv1alpha1.PodTemplate{
+			Image:           testEngineImage,
+			PodAntiAffinity: &aiv1alpha1.PodAntiAffinity{TopologyKey: "kubernetes.io/hostname"},
+		}
+		spec := buildPodSpec(pt, "svc-a", modelHostPath(), aiv1alpha1.AcceleratorVendorMetax)
+		Expect(spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(Equal([]corev1.PodAffinityTerm{{
+			LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"ai.cubestack.io/inference-service": "svc-a"}},
+			TopologyKey:   "kubernetes.io/hostname",
+		}}))
 	})
 
 	It("keeps a legacy volume without at as an unmounted volume", func() {

@@ -21,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	aiv1alpha1 "github.com/suanova/cubestack/api/v1alpha1"
 )
@@ -122,6 +123,24 @@ func buildPodSpec(pt aiv1alpha1.PodTemplate, isvcName string, model *aiv1alpha1.
 		NodeSelector:                  pt.NodeSelector,
 		HostNetwork:                   pt.HostNetwork != nil && *pt.HostNetwork,
 		DNSPolicy:                     pt.DNSPolicy,
+	}
+	if pt.PodAntiAffinity != nil {
+		// Service-wide anti-affinity: no two pods of this service (any role)
+		// may share the declared topology domain. The label selector is fixed
+		// by the platform to the service label — it cannot be customized.
+		if spec.Affinity == nil {
+			spec.Affinity = &corev1.Affinity{}
+		}
+		if spec.Affinity.PodAntiAffinity == nil {
+			spec.Affinity.PodAntiAffinity = &corev1.PodAntiAffinity{}
+		}
+		spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution = append(
+			spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution,
+			corev1.PodAffinityTerm{
+				LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{inferenceServiceLabelKey: isvcName}},
+				TopologyKey:   pt.PodAntiAffinity.TopologyKey,
+			},
+		)
 	}
 	spec.Volumes = append(spec.Volumes, modelVolumes(pt.Mounts, isvcName, model)...)
 	for _, v := range pt.Volumes {

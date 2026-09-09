@@ -412,6 +412,21 @@ spec:
                             NodeSelector constrains scheduling to the declared node labels, e.g. a
                             node pool with the pre-distributed model.
                           type: object
+                        podAntiAffinity:
+                          description: |-
+                            PodAntiAffinity spreads this service's pods across the given topology
+                            domains: no two pods of the service (of any role) may share a domain.
+                            The label selector is fixed by the platform to the service itself.
+                          properties:
+                            topologyKey:
+                              description: |-
+                                TopologyKey is the domain across which the service's pods must be
+                                spread, e.g. kubernetes.io/hostname.
+                              minLength: 1
+                              type: string
+                          required:
+                          - topologyKey
+                          type: object
                         ports:
                           description: Ports lists the container ports.
                           items:
