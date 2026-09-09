@@ -437,7 +437,6 @@ Controller 将此模板按 `workload.kind` 写入对应位置：`LeaderWorkerSet
 | `mounts[]` | list | L0：`model` 固定 `main`、`readOnly` 固定 `true` | 模型挂载声明：`{model: main, at: <容器内路径>, readOnly: true}`。Profile 指定容器内挂载位置，ModelVersion 指定模型的存储方式。仅卷类策略（`HostPath`/`Dynamic`/`Static`）声明；`S3` 策略以 URI 消费模型，不声明 `mounts[]`（§4.5）。 |
 | `volumes[]` | list | L0：仅支持 Kubernetes Volume 的受控子集；每项 `at` 必填（`^/`），`emptyDir`/`hostPath` 二选一；`emptyDir.medium` 枚举 `""`\|`Memory`。L1：同一 role 内 `at` 唯一（VAP） | 附加卷，每项 `{name, at, emptyDir{medium?, sizeLimit?} \| hostPath{path}}`。Controller 为每项生成一个 volume 和一个**可写** volumeMount（挂到 `at`，与只读的模型/资产卷不同）。典型用途：`emptyDir{medium: Memory, sizeLimit: 8Gi}` 提供 `/dev/shm`（vLLM TP>1 的 SHM transport 需大于容器默认 64Mi），`hostPath` 挂 InfiniBand 设备。负 `sizeLimit` 由 K8s 原生 Pod 校验拒绝（工作负载创建时浮出）。 |
 | `nodeSelector` | map | L0：可选 | 多机使用 HostPath 时，用于限定到已预分发模型的节点池。多个 role 共用的约束可引用 `{{ profile.vars.* }}`。只有管理员明确希望用户决定调度位置时，才应引用 `{{ overrides.* }}`。 |
-| `podAntiAffinity` | object | L0：可选；`topologyKey` 必填 | 同服务 Pod 反亲和：`{topologyKey}`。本服务任意 role 的 Pod（leader/worker、跨组、跨 role）在声明的拓扑域内互不共置（`requiredDuringSchedulingIgnoredDuringExecution`）。labelSelector 由平台固定为本服务（`ai.cubestack.io/inference-service`），不可自定义——用于多副本组异机/异域散布；单副本无效果。与 `accelerator.models` 的 nodeSelector/nodeAffinity（§3.2）按 K8s AND 语义叠加。 |
 | `ports[]` | list | — | 容器端口：`{name, containerPort}`。 |
 | `probes` | object | L0：仅支持 `httpGet` / `tcpSocket` | `startup`、`readiness`、`liveness` 探针，以及 `path`、`port`、`periodSeconds`、`timeoutSeconds`、`failureThreshold`、`initialDelaySeconds`。大模型启动较慢时，应设置足够大的 `failureThreshold`，例如 180。 |
 | `hostNetwork` / `dnsPolicy` | - | L1：启用 `hostNetwork` 时，`dnsPolicy` 必须为 `ClusterFirstWithHostNet` | 与 Kubernetes 含义相同。典型动机是 GPU role 的 RDMA/bootstrap 数据面（如 PD 分离的 prefill/decode，见部署基线）；纯 HTTP 入口 role（如 router）不应使用——其流量经 Service 与网关转发，不依赖节点 IP。启用 `hostNetwork` 时 Controller 自动把 `ports[].containerPort` 回填为 `hostPort`，使调度器能对 host 端口记账；注意固定端口意味着同节点端口独占：绑定相同端口的两个实例（即使属于不同 InferenceService）不能调度到同一节点。 |
@@ -486,6 +485,7 @@ Controller 将此模板按 `workload.kind` 写入对应位置：`LeaderWorkerSet
 | `endpoint.role` | string | L0：必填；L1：必须存在于 `roles`，且该 role 须定义 `service` | 作为服务对外端点的 role 名称。Controller 以该 role 的 Service 作为内部端点（InferenceService 的 `status.endpoint.internal`）；`publish: true` 时，它同时作为 HTTPRoute 的后端。渲染后 Service 的可解析性由 `EndpointReady` 校验（见 §3.3）。 |
 | `endpoint.portName` | string | L0：可选，默认 `http`；L2：渲染后须存在于端点 Service 的端口中（`EndpointReady`） | 对外端点使用的 Service 端口名，与 `endpoint.role` 一起确定 HTTPRoute 的后端端口。 |
 | `readinessPolicy.requireAllRoles` | bool | L0：v1alpha1 固定 `true` | 服务就绪条件的聚合方式：所有 role 的工作负载和 Pod 都就绪后，InferenceService 才会标记为 Ready。 |
+| `podAntiAffinity` | object | L0：可选；`topologyKey` 必填且为合法 K8s label key | 同服务 Pod 反亲和：`{topologyKey}`。本服务**全部 role** 的 Pod（leader/worker、跨组、跨 role）在声明的拓扑域内互不共置（`requiredDuringSchedulingIgnoredDuringExecution`）——声明一次，Controller 将其注入每个 role 的 PodSpec，保证是互斥的双向约束。labelSelector 由平台固定为本服务（`ai.cubestack.io/inference-service`），不可自定义——用于多副本组异机/异域散布；单副本无效果。与 `accelerator.models` 的 nodeSelector/nodeAffinity（§3.2）按 K8s AND 语义叠加。 |
 
 #### Status
 

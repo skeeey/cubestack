@@ -268,12 +268,6 @@ type PodTemplate struct {
 	// +optional
 	Volumes []Volume `json:"volumes,omitempty"`
 
-	// PodAntiAffinity spreads this service's pods across the given topology
-	// domains: no two pods of the service (of any role) may share a domain.
-	// The label selector is fixed by the platform to the service itself.
-	// +optional
-	PodAntiAffinity *PodAntiAffinity `json:"podAntiAffinity,omitempty"`
-
 	// NodeSelector constrains scheduling to the declared node labels, e.g. a
 	// node pool with the pre-distributed model.
 	// +optional
@@ -427,8 +421,9 @@ type EmptyDirVolume struct {
 // the service label may share a topology domain.
 type PodAntiAffinity struct {
 	// TopologyKey is the domain across which the service's pods must be
-	// spread, e.g. kubernetes.io/hostname.
-	// +kubebuilder:validation:MinLength=1
+	// spread, e.g. kubernetes.io/hostname. Must be a valid Kubernetes label
+	// key: an optional lowercase DNS prefix followed by a lowercase name.
+	// +kubebuilder:validation:Pattern="^([a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*[/])?[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$"
 	TopologyKey string `json:"topologyKey"`
 }
 
@@ -612,6 +607,12 @@ type InferenceRuntimeProfileSpec struct {
 
 	// Endpoint selects the role serving as the service endpoint.
 	Endpoint EndpointSpec `json:"endpoint"`
+
+	// PodAntiAffinity spreads this service's pods (of every role) across the
+	// given topology domains: no two pods of the service may share a domain.
+	// The label selector is fixed by the platform to the service itself.
+	// +optional
+	PodAntiAffinity *PodAntiAffinity `json:"podAntiAffinity,omitempty"`
 
 	// ReadinessPolicy aggregates the service readiness condition.
 	// +optional

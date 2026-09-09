@@ -546,6 +546,11 @@ func (in *InferenceRuntimeProfileSpec) DeepCopyInto(out *InferenceRuntimeProfile
 		}
 	}
 	out.Endpoint = in.Endpoint
+	if in.PodAntiAffinity != nil {
+		in, out := &in.PodAntiAffinity, &out.PodAntiAffinity
+		*out = new(PodAntiAffinity)
+		**out = **in
+	}
 	if in.ReadinessPolicy != nil {
 		in, out := &in.ReadinessPolicy, &out.ReadinessPolicy
 		*out = new(ReadinessPolicy)
@@ -1198,11 +1203,6 @@ func (in *PodTemplate) DeepCopyInto(out *PodTemplate) {
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
-	}
-	if in.PodAntiAffinity != nil {
-		in, out := &in.PodAntiAffinity, &out.PodAntiAffinity
-		*out = new(PodAntiAffinity)
-		**out = **in
 	}
 	if in.NodeSelector != nil {
 		in, out := &in.NodeSelector, &out.NodeSelector

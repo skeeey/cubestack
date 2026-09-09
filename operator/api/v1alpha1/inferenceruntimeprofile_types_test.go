@@ -223,7 +223,7 @@ var _ = Describe("InferenceRuntimeProfile", func() {
 
 		It("accepts a podAntiAffinity topologyKey and round-trips the spec", func() {
 			irp := validInferenceRuntimeProfile("irp-antiaffinity")
-			irp.Spec.Roles[1].PodTemplate.PodAntiAffinity = &PodAntiAffinity{TopologyKey: "kubernetes.io/hostname"}
+			irp.Spec.PodAntiAffinity = &PodAntiAffinity{TopologyKey: "kubernetes.io/hostname"}
 
 			Expect(k8sClient.Create(ctx, irp)).To(Succeed())
 
@@ -428,9 +428,15 @@ var _ = Describe("InferenceRuntimeProfile", func() {
 			Entry("podAntiAffinity without topologyKey",
 				"irp-invalid-antiaffinity-no-topology",
 				func(s *InferenceRuntimeProfileSpec) {
-					s.Roles[1].PodTemplate.PodAntiAffinity = &PodAntiAffinity{}
+					s.PodAntiAffinity = &PodAntiAffinity{}
 				},
-				"spec.roles[1].podTemplate.podAntiAffinity.topologyKey"),
+				"spec.podAntiAffinity.topologyKey"),
+			Entry("podAntiAffinity with an invalid topologyKey",
+				"irp-invalid-antiaffinity-topology",
+				func(s *InferenceRuntimeProfileSpec) {
+					s.PodAntiAffinity = &PodAntiAffinity{TopologyKey: "not a label key"}
+				},
+				"spec.podAntiAffinity.topologyKey"),
 			Entry("probe without httpGet or tcpSocket",
 				"irp-invalid-probe-no-action",
 				func(s *InferenceRuntimeProfileSpec) {
