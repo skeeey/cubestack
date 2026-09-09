@@ -328,7 +328,7 @@ VAP 校验无法防止 DELETE+CREATE 组合操作，平台允许该组合操作�
 | 字段 | 类型 | 校验规则 | 说明 |
 |---|---|---|---|
 | `vendor` | enum | L0：必填、枚举 | GPU 资源名映射，根据厂商映射为 Kubernetes GPU 扩展资源名。例如 `metax` → `metax-tech.com/gpu`，`nvidia` → `nvidia.com/gpu`。Controller 使用该资源名，根据 `gpuPerPod` 为 Pod 设置 GPU `requests` 和 `limits`。                          |
-| `models` | list | L0：必填、string 列表 | 限制可调度的 GPU 型号，Controller 根据声明的 GPU 型号自动注入节点选择约束。单个型号使用 `nodeSelector`；多个型号使用 `nodeAffinity` 的 `In` 表达式，因为 `nodeSelector` 无法表示多个型号之间的“或”关系。GPU 型号使用平台约定的节点 label：`ai.cubestack.io/accelerator-model`。 |
+| `models` | list | L0：必填、string 列表 | 限制可调度的 GPU 型号，Controller 根据声明的 GPU 型号自动注入节点选择约束。单个型号使用 `nodeSelector`；多个型号使用 `nodeAffinity` 的 `In` 表达式，因为 `nodeSelector` 无法表示多个型号之间的“或”关系。型号值须与厂商设备插件写入的节点 label 值一致（见「节点 GPU 型号信息」）。 |
 
 **GPU 型号约束的目的**
 
@@ -349,13 +349,15 @@ GPU 扩展资源通常只区分厂商，不区分具体 GPU 型号。例如，�
 
 不需要定义额外的字段合并规则。最终只有同时满足所有约束的节点才能被调度。
 
+唯一需要显式处理的冲突：管理员把注入用的厂商型号 label key 写进了 `podTemplate.nodeSelector`，但值不在 `accelerator.models` 中——这种声明无论怎么调度都永不满足（同 key 不同值，K8s 对 nodeSelector 的 key 不做合并）。Controller 在渲染阶段将其判为 `Rendered=False, reason=ModelSchedulingConflict`（Profile spec 不可变，不能等部署后才发现）。值属于 `models` 的等价声明（如 `metax-tech.com/gpu.product: MXC500`）则与注入一致，不报错。
+
 **与多节点 HostPath 的关系** 
 
 对于使用 HostPath 的模型存储，模型通常需要预先分发到对应的 GPU 节点。当 `accelerator.models` 限制服务只能调度到指定 GPU 型号的节点时，模型预分发的范围也可以按照对应的 GPU 型号节点池进行管理。因此，管理员需要保证：服务允许调度到的 GPU 型号的所有节点，均已完成对应模型的预分发。这样，模型预分发范围与服务的实际调度范围保持一致。
 
 **节点 GPU 型号信息** 
 
-自动注入 GPU 型号约束的前提是，节点上存在可信的 GPU 型号 label：`ai.cubestack.io/accelerator-model` 该 label 可以由 GPU 设备发现机制或平台 Agent 负责写入。具体的事实来源和打标方式需要在实现阶段确认。在 GPU 型号 label 的来源尚未确定之前，Controller 不启用自动注入逻辑。管理员仍可以通过 `podTemplate.nodeSelector` 手动添加等价的节点约束。这不会改变 `accelerator.models` 的字段语义；后续启用自动注入仅属于 Controller 行为的增强，API 字段本身无需调整。
+自动注入的型号 label 以**厂商设备插件原生写入的节点 label** 为事实来源，不再约定平台自有 label：MetaX 插件写入 `metax-tech.com/gpu.product`（如 `MXC500`），NVIDIA 栈（GPU Feature Discovery）写入 `nvidia.com/gpu.product`。型号 label 与扩展资源名（`metax-tech.com/gpu` / `nvidia.com/gpu`）同属设备插件写入的同一信任域。vendor→label 映射固定为：`metax` → `metax-tech.com/gpu.product`，`nvidia` → `nvidia.com/gpu.product`。`accelerator.models` 的值必须与节点 label 值完全一致（如 `MXC500`）。
 
 ##### modelRequirements
 

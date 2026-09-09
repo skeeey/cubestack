@@ -310,6 +310,11 @@ func (r *InferenceServiceReconciler) desiredWorkload(isvc *aiv1alpha1.InferenceS
 	if rr.UsesCredentials {
 		addCredentialsVolume(&podSpec, isvc.Name)
 	}
+	// A multi-model accelerator restricts scheduling to nodes offering one of
+	// the declared models (design §3.2, resolved by the renderer).
+	if rr.ModelNodeAffinity != nil {
+		attachModelNodeAffinity(&podSpec, rr.ModelNodeAffinity.Label, rr.ModelNodeAffinity.Models)
+	}
 	// Every role gets the mount-type asset ConfigMaps injected (design §4.4);
 	// added before hashing so the volumes are part of the pod hash.
 	addMountAssetVolumes(&podSpec, isvc.Name, profile.Spec.Assets)

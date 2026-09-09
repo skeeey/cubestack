@@ -37,6 +37,9 @@ const (
 	testShmMountPath = "/dev/shm"
 	testMemoryMedium = "Memory"
 	testShmVolName   = "dshm"
+
+	testGPUModelMXC500 = "MXC500"
+	testGPUModelMXC550 = "MXC550"
 )
 
 var _ = Describe("buildPodSpec", func() {
@@ -76,6 +79,25 @@ var _ = Describe("buildPodSpec", func() {
 		c := spec.Containers[0]
 		Expect(c.Resources.Requests.Name("nvidia.com/gpu", resource.DecimalSI).String()).To(Equal("1"))
 		Expect(c.Resources.Limits.Name("nvidia.com/gpu", resource.DecimalSI).String()).To(Equal("1"))
+	})
+
+	It("attaches a required nodeAffinity In term for multi-model accelerators", func() {
+		spec := &corev1.PodSpec{}
+		attachModelNodeAffinity(spec, "metax-tech.com/gpu.product", []string{testGPUModelMXC500, testGPUModelMXC550})
+		Expect(spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(Equal(&corev1.NodeSelector{
+			NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+				MatchExpressions: []corev1.NodeSelectorRequirement{{
+					Key:      "metax-tech.com/gpu.product",
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{testGPUModelMXC500, testGPUModelMXC550},
+				}},
+			}},
+		}))
+		// AND-combined with any pre-existing node selector.
+		spec2 := &corev1.PodSpec{}
+		attachModelNodeAffinity(spec2, "metax-tech.com/gpu.product", []string{testGPUModelMXC500})
+		attachModelNodeAffinity(spec2, "example.com/extra", []string{"a"})
+		Expect(spec2.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms).To(HaveLen(2))
 	})
 
 	It("keeps a legacy volume without at as an unmounted volume", func() {

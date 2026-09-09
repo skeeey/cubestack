@@ -152,6 +152,31 @@ func buildPodSpec(pt aiv1alpha1.PodTemplate, isvcName string, model *aiv1alpha1.
 	return spec
 }
 
+// attachModelNodeAffinity constrains scheduling to nodes offering one of the
+// declared accelerator models when the profile declares several (design §3.2):
+// a required nodeAffinity In term on the vendor product label, AND-combined
+// with any existing affinity. Single-model profiles are injected as a
+// nodeSelector instead and never reach this helper.
+func attachModelNodeAffinity(spec *corev1.PodSpec, label string, models []string) {
+	if spec.Affinity == nil {
+		spec.Affinity = &corev1.Affinity{}
+	}
+	if spec.Affinity.NodeAffinity == nil {
+		spec.Affinity.NodeAffinity = &corev1.NodeAffinity{}
+	}
+	if spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{}
+	}
+	spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = append(
+		spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms,
+		corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
+			Key:      label,
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   models,
+		}}},
+	)
+}
+
 // addMountAssetVolumes mounts every profile asset declared with assets[].mount
 // as a read-only ConfigMap volume named asset-<name> backed by the rendered
 // copy <isvc>-<name> (design §4.4: mount assets apply to every role, mounted
