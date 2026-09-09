@@ -93,11 +93,21 @@ var _ = Describe("buildPodSpec", func() {
 				}},
 			}},
 		}))
-		// AND-combined with any pre-existing node selector.
+		// NodeSelectorTerms are OR-combined: the model constraint must be merged
+		// into every existing term, never appended as an alternative term — a
+		// node matching another term alone would otherwise schedule without the
+		// model label.
 		spec2 := &corev1.PodSpec{}
 		attachModelNodeAffinity(spec2, "metax-tech.com/gpu.product", []string{testGPUModelMXC500})
 		attachModelNodeAffinity(spec2, "example.com/extra", []string{"a"})
-		Expect(spec2.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms).To(HaveLen(2))
+		Expect(spec2.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(Equal(&corev1.NodeSelector{
+			NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+				MatchExpressions: []corev1.NodeSelectorRequirement{
+					{Key: "metax-tech.com/gpu.product", Operator: corev1.NodeSelectorOpIn, Values: []string{testGPUModelMXC500}},
+					{Key: "example.com/extra", Operator: corev1.NodeSelectorOpIn, Values: []string{"a"}},
+				},
+			}},
+		}))
 	})
 
 	It("keeps a legacy volume without at as an unmounted volume", func() {

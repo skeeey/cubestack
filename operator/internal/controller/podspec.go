@@ -164,17 +164,23 @@ func attachModelNodeAffinity(spec *corev1.PodSpec, label string, models []string
 	if spec.Affinity.NodeAffinity == nil {
 		spec.Affinity.NodeAffinity = &corev1.NodeAffinity{}
 	}
-	if spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
-		spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{}
+	requirement := corev1.NodeSelectorRequirement{Key: label, Operator: corev1.NodeSelectorOpIn, Values: models}
+	required := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if required == nil {
+		spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{
+			NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{requirement}}},
+		}
+		return
 	}
-	spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = append(
-		spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms,
-		corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
-			Key:      label,
-			Operator: corev1.NodeSelectorOpIn,
-			Values:   models,
-		}}},
-	)
+	// NodeSelectorTerms are OR-combined, so the model constraint must be merged
+	// into every existing term: a new alternative term would let a node that
+	// matches another term schedule without the model label.
+	for i := range required.NodeSelectorTerms {
+		required.NodeSelectorTerms[i].MatchExpressions = append(required.NodeSelectorTerms[i].MatchExpressions, requirement)
+	}
+	if len(required.NodeSelectorTerms) == 0 {
+		required.NodeSelectorTerms = append(required.NodeSelectorTerms, corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{requirement}})
+	}
 }
 
 // addMountAssetVolumes mounts every profile asset declared with assets[].mount

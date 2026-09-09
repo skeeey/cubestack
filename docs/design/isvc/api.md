@@ -349,6 +349,8 @@ GPU 扩展资源通常只区分厂商，不区分具体 GPU 型号。例如，�
 
 不需要定义额外的字段合并规则。最终只有同时满足所有约束的节点才能被调度。
 
+唯一的实现注意点：多型号的 `nodeAffinity` 以 `In` 表达式形式并入 `nodeAffinity` 的**每一个**已有 `NodeSelectorTerm`（terms 之间是 Kubernetes OR 语义）——不能作为新的替代 term 追加，否则仅匹配旧 term 的节点会绕过型号约束。未来若平台自身需要 AND 型 term（而非替代型），也按此规则与型号约束同 term 合并。
+
 唯一需要显式处理的冲突：管理员把注入用的厂商型号 label key 写进了 `podTemplate.nodeSelector`，但值不在 `accelerator.models` 中——这种声明无论怎么调度都永不满足（同 key 不同值，K8s 对 nodeSelector 的 key 不做合并）。Controller 在渲染阶段将其判为 `Rendered=False, reason=ModelSchedulingConflict`（Profile spec 不可变，不能等部署后才发现）。值属于 `models` 的等价声明（如 `metax-tech.com/gpu.product: MXC500`）则与注入一致，不报错。
 
 **与多节点 HostPath 的关系** 
