@@ -241,6 +241,13 @@ func injectModelSelector(rr *RenderedRole, accel aiv1alpha1.Accelerator, errs []
 	if len(accel.Models) == 0 {
 		return errs
 	}
+	// Only roles that request GPUs are constrained to GPU-model nodes. A
+	// CPU-only auxiliary role (e.g. a router) must be able to run on any node
+	// — pinning it to GPU-model nodes would strand it on clusters without
+	// GPU nodes (or with no model label on non-GPU nodes).
+	if rr.PodTemplate.Resources == nil || rr.PodTemplate.Resources.GPUPerPod == nil {
+		return errs
+	}
 	label := metaxProductLabel
 	if accel.Vendor == aiv1alpha1.AcceleratorVendorNvidia {
 		label = nvidiaProductLabel

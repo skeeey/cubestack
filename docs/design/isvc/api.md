@@ -328,7 +328,7 @@ VAP 校验无法防止 DELETE+CREATE 组合操作，平台允许该组合操作�
 | 字段 | 类型 | 校验规则 | 说明 |
 |---|---|---|---|
 | `vendor` | enum | L0：必填、枚举 | GPU 资源名映射，根据厂商映射为 Kubernetes GPU 扩展资源名。例如 `metax` → `metax-tech.com/gpu`，`nvidia` → `nvidia.com/gpu`。Controller 使用该资源名，根据 `gpuPerPod` 为 Pod 设置 GPU `requests` 和 `limits`。                          |
-| `models` | list | L0：必填、string 列表 | 限制可调度的 GPU 型号，Controller 根据声明的 GPU 型号自动注入节点选择约束。单个型号使用 `nodeSelector`；多个型号使用 `nodeAffinity` 的 `In` 表达式，因为 `nodeSelector` 无法表示多个型号之间的“或”关系。型号值须与厂商设备插件写入的节点 label 值一致（见「节点 GPU 型号信息」）。 |
+| `models` | list | L0：必填、string 列表 | 限制可调度的 GPU 型号，Controller 根据声明的 GPU 型号自动注入节点选择约束。单个型号使用 `nodeSelector`；多个型号使用 `nodeAffinity` 的 `In` 表达式，因为 `nodeSelector` 无法表示多个型号之间的“或”关系。型号值须与厂商设备插件写入的节点 label 值一致（见「节点 GPU 型号信息」）。约束只注入**声明了 GPU**（`resources.gpuPerPod`）的 role；CPU-only 辅助 role（如 router）不受 GPU 型号限制、可调度到任意节点。 |
 
 **GPU 型号约束的目的**
 
