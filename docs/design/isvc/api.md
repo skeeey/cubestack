@@ -773,7 +773,7 @@ env:
 | —（固定值，不开放） | `strategy: RollingUpdate{maxSurge: 0, maxUnavailable: 1}` | 与 LWS 同一策略：先杀后建不产生并发端口绑定；`replicas=1` 时等价 Recreate |
 | 调度约束 | 同 LWS 的合并规则 | — |
 
-**Service 映射**：`service.ports[]`（targetPort 可取容器端口名）；`service.headless: true` 额外生成 `<isvc>-<role>-hl`（ClusterIP: None）。Service 名即 `roles.<name>.serviceName` 上下文值，供跨 role 发现：`http://{{ roles.prefill.serviceName }}:30000`。未声明 `service` 的 role 没有 Service，`roles.<name>.serviceName` 指向不存在的对象——引用方应只依赖声明了 `service` 的 role。
+**Service 映射**：`service.ports[]`（targetPort 可取容器端口名）；`service.headless: true` 额外生成 `<isvc>-<role>-hl`（ClusterIP: None）。**selector 按 workload 类型区分**：`LeaderWorkerSet` role 的 Service 只选组长——selector 在 Controller 标签之外追加 `leaderworkerset.sigs.k8s.io/worker-index: "0"`。组内只有 leader 提供该 role 的端点，worker 跑引擎的 headless 侧（如 vLLM 多机 PP/TP 的 `--headless`），把流量分摊给整组会打到不接请求的 Pod；反过来若让 worker 探针失败以躲开流量，则组永不就绪（LWS 组就绪 = leader 就绪 ∧ worker 就绪）。headless Service **保持不过滤**，按 Pod 发现正是它的用途。`Deployment` role 与 `group.size=1` 的 LWS role 行为不变（后者唯一 Pod 的 worker-index 同样是 0）。Service 名即 `roles.<name>.serviceName` 上下文值，供跨 role 发现：`http://{{ roles.prefill.serviceName }}:30000`。未声明 `service` 的 role 没有 Service，`roles.<name>.serviceName` 指向不存在的对象——引用方应只依赖声明了 `service` 的 role。
 
 **资源映射**：`gpuPerPod` → `accelerator.vendor` 映射的资源名（metax → `metax-tech.com/gpu`，nvidia → `nvidia.com/gpu`）的 requests+limits；`cpu`/`memory` → requests。
 
