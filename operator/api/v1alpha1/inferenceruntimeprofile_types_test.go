@@ -461,6 +461,14 @@ var _ = Describe("InferenceRuntimeProfile", func() {
 					s.Roles[1].PodTemplate.Probes = &Probes{Readiness: &Probe{FailureThreshold: ptrTo(int32(3))}}
 				},
 				"exactly one of httpGet, tcpSocket or exec"),
+			Entry("probe with an empty exec command",
+				"irp-invalid-probe-empty-exec-command",
+				func(s *InferenceRuntimeProfileSpec) {
+					s.Roles[1].PodTemplate.Probes = &Probes{Readiness: &Probe{
+						Exec: &ExecAction{Command: []string{}},
+					}}
+				},
+				"spec.roles[1].podTemplate.probes.readiness.exec.command"),
 			Entry("probe with two probe actions",
 				"irp-invalid-probe-two-actions",
 				func(s *InferenceRuntimeProfileSpec) {
