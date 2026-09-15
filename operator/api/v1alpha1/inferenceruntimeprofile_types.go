@@ -461,8 +461,8 @@ type Probes struct {
 	Liveness *Probe `json:"liveness,omitempty"`
 }
 
-// Probe is a probe with either httpGet or tcpSocket.
-// +kubebuilder:validation:XValidation:rule="(has(self.httpGet) ? 1 : 0) + (has(self.tcpSocket) ? 1 : 0) == 1",message="exactly one of httpGet or tcpSocket must be set"
+// Probe is a probe with exactly one of httpGet, tcpSocket or exec.
+// +kubebuilder:validation:XValidation:rule="(has(self.httpGet) ? 1 : 0) + (has(self.tcpSocket) ? 1 : 0) + (has(self.exec) ? 1 : 0) == 1",message="exactly one of httpGet, tcpSocket or exec must be set"
 type Probe struct {
 	// HTTPGet performs an HTTP GET probe.
 	// +optional
@@ -471,6 +471,10 @@ type Probe struct {
 	// TCPSocket performs a TCP connect probe.
 	// +optional
 	TCPSocket *TCPSocketAction `json:"tcpSocket,omitempty"`
+
+	// Exec runs a command inside the container.
+	// +optional
+	Exec *ExecAction `json:"exec,omitempty"`
 
 	// InitialDelaySeconds is the delay before the first probe.
 	// +optional
@@ -503,6 +507,16 @@ type HTTPGetAction struct {
 type TCPSocketAction struct {
 	// Port is the port to probe, either a number or a container port name.
 	Port intstr.IntOrString `json:"port"`
+}
+
+// ExecAction runs a command inside the container: the probe succeeds when the
+// command exits 0. It is the only probe type that can tell apart pods whose
+// runtime role differs within one workload — e.g. a LeaderWorkerSet group in
+// which the workers run the engine's headless side and serve no HTTP port.
+type ExecAction struct {
+	// Command is the command line run inside the container.
+	// +kubebuilder:validation:MinItems=1
+	Command []string `json:"command"`
 }
 
 // RoleService defines the Kubernetes Service of a role.

@@ -296,6 +296,8 @@ func probeToK8s(p *aiv1alpha1.Probe) *corev1.Probe {
 		probe.HTTPGet = &corev1.HTTPGetAction{Path: p.HTTPGet.Path, Port: p.HTTPGet.Port}
 	case p.TCPSocket != nil:
 		probe.TCPSocket = &corev1.TCPSocketAction{Port: p.TCPSocket.Port}
+	case p.Exec != nil:
+		probe.Exec = &corev1.ExecAction{Command: p.Exec.Command}
 	}
 	return probe
 }

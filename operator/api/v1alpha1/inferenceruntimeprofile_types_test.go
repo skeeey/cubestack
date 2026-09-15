@@ -204,6 +204,24 @@ var _ = Describe("InferenceRuntimeProfile", func() {
 			Expect(k8sClient.Delete(ctx, irp)).To(Succeed())
 		})
 
+		It("accepts an exec readiness probe and round-trips it", func() {
+			command := []string{"/bin/bash", "-c", "curl -sf http://127.0.0.1:8000/health"}
+			irp := validInferenceRuntimeProfile("irp-exec-probe")
+			irp.Spec.Roles[1].PodTemplate.Probes = &Probes{Readiness: &Probe{
+				Exec:             &ExecAction{Command: command},
+				PeriodSeconds:    ptrTo(int32(10)),
+				FailureThreshold: ptrTo(int32(30)),
+			}}
+
+			Expect(k8sClient.Create(ctx, irp)).To(Succeed())
+
+			got := &InferenceRuntimeProfile{}
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: irp.Name}, got)).To(Succeed())
+			Expect(got.Spec.Roles[1].PodTemplate.Probes.Readiness.Exec.Command).To(Equal(command))
+
+			Expect(k8sClient.Delete(ctx, irp)).To(Succeed())
+		})
+
 		It("accepts additional volumes and extendedResources and round-trips the spec", func() {
 			irp := validInferenceRuntimeProfile("irp-volumes")
 			irp.Spec.Roles[1].PodTemplate.Volumes = []Volume{
@@ -442,7 +460,16 @@ var _ = Describe("InferenceRuntimeProfile", func() {
 				func(s *InferenceRuntimeProfileSpec) {
 					s.Roles[1].PodTemplate.Probes = &Probes{Readiness: &Probe{FailureThreshold: ptrTo(int32(3))}}
 				},
-				"exactly one of httpGet or tcpSocket"),
+				"exactly one of httpGet, tcpSocket or exec"),
+			Entry("probe with two probe actions",
+				"irp-invalid-probe-two-actions",
+				func(s *InferenceRuntimeProfileSpec) {
+					s.Roles[1].PodTemplate.Probes = &Probes{Readiness: &Probe{
+						HTTPGet: &HTTPGetAction{Path: "/health", Port: intstr.FromInt(8000)},
+						Exec:    &ExecAction{Command: []string{"/bin/true"}},
+					}}
+				},
+				"exactly one of httpGet, tcpSocket or exec"),
 			Entry("service port missing name",
 				"irp-invalid-port-name",
 				func(s *InferenceRuntimeProfileSpec) { s.Roles[0].Service.Ports[0].Name = "" },

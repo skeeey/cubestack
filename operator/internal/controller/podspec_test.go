@@ -46,6 +46,10 @@ const (
 	testGPUModelMXC550 = "MXC550"
 )
 
+// testExecProbeCommand is the command line of the exec-probe specs: the
+// renderer only copies it into the container, it never runs here.
+var testExecProbeCommand = []string{"/bin/bash", "-c", "curl -sf http://127.0.0.1:8000/health"}
+
 var _ = Describe("buildPodSpec", func() {
 	modelHostPath := func() *aiv1alpha1.ModelVersion {
 		return &aiv1alpha1.ModelVersion{Spec: aiv1alpha1.ModelVersionSpec{
@@ -83,6 +87,22 @@ var _ = Describe("buildPodSpec", func() {
 		c := spec.Containers[0]
 		Expect(c.Resources.Requests.Name("nvidia.com/gpu", resource.DecimalSI).String()).To(Equal("1"))
 		Expect(c.Resources.Limits.Name("nvidia.com/gpu", resource.DecimalSI).String()).To(Equal("1"))
+	})
+
+	It("renders an exec readiness probe", func() {
+		pt := aiv1alpha1.PodTemplate{
+			Image: testEngineImage,
+			Probes: &aiv1alpha1.Probes{Readiness: &aiv1alpha1.Probe{
+				Exec:             &aiv1alpha1.ExecAction{Command: testExecProbeCommand},
+				PeriodSeconds:    ptrTo(int32(10)),
+				FailureThreshold: ptrTo(int32(30)),
+			}},
+		}
+		spec := buildPodSpec(pt, "svc", modelHostPath(), aiv1alpha1.AcceleratorVendorMetax)
+		c := spec.Containers[0]
+		Expect(c.ReadinessProbe.Exec).To(Equal(&corev1.ExecAction{Command: testExecProbeCommand}))
+		Expect(c.ReadinessProbe.PeriodSeconds).To(Equal(int32(10)))
+		Expect(c.ReadinessProbe.FailureThreshold).To(Equal(int32(30)))
 	})
 
 	It("attaches the service-wide podAntiAffinity term with the platform selector", func() {

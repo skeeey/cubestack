@@ -456,6 +456,19 @@ spec:
                             liveness:
                               description: Liveness is the liveness probe.
                               properties:
+                                exec:
+                                  description: Exec runs a command inside the container.
+                                  properties:
+                                    command:
+                                      description: Command is the command line run
+                                        inside the container.
+                                      items:
+                                        type: string
+                                      minItems: 1
+                                      type: array
+                                  required:
+                                  - command
+                                  type: object
                                 failureThreshold:
                                   description: FailureThreshold is the consecutive
                                     failure count before giving up.
@@ -505,13 +518,26 @@ spec:
                                   type: integer
                               type: object
                               x-kubernetes-validations:
-                              - message: exactly one of httpGet or tcpSocket must
-                                  be set
+                              - message: exactly one of httpGet, tcpSocket or exec
+                                  must be set
                                 rule: '(has(self.httpGet) ? 1 : 0) + (has(self.tcpSocket)
-                                  ? 1 : 0) == 1'
+                                  ? 1 : 0) + (has(self.exec) ? 1 : 0) == 1'
                             readiness:
                               description: Readiness is the readiness probe.
                               properties:
+                                exec:
+                                  description: Exec runs a command inside the container.
+                                  properties:
+                                    command:
+                                      description: Command is the command line run
+                                        inside the container.
+                                      items:
+                                        type: string
+                                      minItems: 1
+                                      type: array
+                                  required:
+                                  - command
+                                  type: object
                                 failureThreshold:
                                   description: FailureThreshold is the consecutive
                                     failure count before giving up.
@@ -561,13 +587,26 @@ spec:
                                   type: integer
                               type: object
                               x-kubernetes-validations:
-                              - message: exactly one of httpGet or tcpSocket must
-                                  be set
+                              - message: exactly one of httpGet, tcpSocket or exec
+                                  must be set
                                 rule: '(has(self.httpGet) ? 1 : 0) + (has(self.tcpSocket)
-                                  ? 1 : 0) == 1'
+                                  ? 1 : 0) + (has(self.exec) ? 1 : 0) == 1'
                             startup:
                               description: Startup is the startup probe.
                               properties:
+                                exec:
+                                  description: Exec runs a command inside the container.
+                                  properties:
+                                    command:
+                                      description: Command is the command line run
+                                        inside the container.
+                                      items:
+                                        type: string
+                                      minItems: 1
+                                      type: array
+                                  required:
+                                  - command
+                                  type: object
                                 failureThreshold:
                                   description: FailureThreshold is the consecutive
                                     failure count before giving up.
@@ -617,10 +656,10 @@ spec:
                                   type: integer
                               type: object
                               x-kubernetes-validations:
-                              - message: exactly one of httpGet or tcpSocket must
-                                  be set
+                              - message: exactly one of httpGet, tcpSocket or exec
+                                  must be set
                                 rule: '(has(self.httpGet) ? 1 : 0) + (has(self.tcpSocket)
-                                  ? 1 : 0) == 1'
+                                  ? 1 : 0) + (has(self.exec) ? 1 : 0) == 1'
                           type: object
                         resources:
                           description: Resources declares CPU, memory and per-Pod
