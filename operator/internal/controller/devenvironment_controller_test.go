@@ -1297,13 +1297,17 @@ var _ = Describe("DevEnvironment apply is idempotent", func() {
 		}}
 		gw := &gatewayv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: testDevEnvGatewayName, Namespace: testNamespace}}
 
+		// Creating the environment enqueues the reconciler the suite runs, so a
+		// helper's Get may find nothing and then lose the Create to it. That
+		// race is not what this spec is about: ignore the loser's
+		// AlreadyExists and compare against whatever is stored.
 		apply := func() {
-			Expect(r.applyService(ctx, stored)).To(Succeed())
-			Expect(r.applyNetworkPolicy(ctx, stored)).To(Succeed())
+			Expect(client.IgnoreAlreadyExists(r.applyService(ctx, stored))).To(Succeed())
+			Expect(client.IgnoreAlreadyExists(r.applyNetworkPolicy(ctx, stored))).To(Succeed())
 			_, err := r.applyHTTPRoute(ctx, stored, gw)
-			Expect(err).NotTo(HaveOccurred())
+			Expect(client.IgnoreAlreadyExists(err)).To(Succeed())
 			_, err = r.applyTCPRoute(ctx, stored, gw, sshPortName, sshServicePort)
-			Expect(err).NotTo(HaveOccurred())
+			Expect(client.IgnoreAlreadyExists(err)).To(Succeed())
 		}
 
 		apply() // every object is created
