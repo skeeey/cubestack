@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -187,10 +189,24 @@ func (r *InferenceServiceReconciler) applyWorkloads(ctx context.Context, isvc *a
 		statuses = append(statuses, roleStatus(role, rr, isvc, existing, ready))
 	}
 
+	if err := r.applyServiceMonitor(ctx, isvc, profile); err != nil {
+		return statuses, nil, err
+	}
 	if err := r.cleanupOrphanWorkloads(ctx, isvc, desiredPrefixes, desiredKinds); err != nil {
 		return statuses, nil, err
 	}
 	return statuses, res, nil
+}
+
+// applyServiceMonitor creates or updates the ServiceMonitor scraping this
+// service's role Services. It is monitoring infrastructure rather than part of
+// the service, so a cluster without the prometheus-operator CRDs skips it (see
+// ServiceMonitorAvailable) instead of failing the apply on an unknown kind.
+func (r *InferenceServiceReconciler) applyServiceMonitor(ctx context.Context, isvc *aiv1alpha1.InferenceService, profile *aiv1alpha1.InferenceRuntimeProfile) error {
+	if !r.ServiceMonitorAvailable {
+		return nil
+	}
+	return r.applyResource(ctx, isvc, desiredServiceMonitor(isvc, endpointPortName(profile), r.Scheme))
 }
 
 // applyService creates or updates the role's Service <isvc>-<role>, plus the
@@ -231,11 +247,49 @@ func (r *InferenceServiceReconciler) applyResource(ctx context.Context, isvc *ai
 	if err := ensureOwned(existing, isvc.UID); err != nil {
 		return err
 	}
-	if !serviceNeedsUpdate(existing, obj) {
+	if !resourceNeedsUpdate(existing, obj) {
 		return nil
 	}
 	obj.SetResourceVersion(existing.GetResourceVersion())
 	return r.Update(ctx, obj)
+}
+
+// resourceNeedsUpdate reports whether the controller-owned fields of an
+// existing generated resource differ from the desired ones; each kind's
+// comparator decides which fields those are.
+func resourceNeedsUpdate(existing, desired client.Object) bool {
+	switch desired.(type) {
+	case *corev1.Service:
+		return serviceNeedsUpdate(existing, desired)
+	case *monitoringv1.ServiceMonitor:
+		return serviceMonitorNeedsUpdate(existing, desired)
+	}
+	return true
+}
+
+// serviceMonitorNeedsUpdate reports whether the controller-owned fields of an
+// existing ServiceMonitor differ from the desired ones: the labels, the scrape
+// selector, the namespace selector and the endpoints. That is the whole surface
+// the controller authors, so an external edit to any of it is reverted like any
+// other drift; nothing outside it is compared.
+//
+// The comparison must stay exact in the other direction too. A field the
+// controller writes that the API server defaulted on read would differ from the
+// desired object every time, so every reconcile would rewrite the object and,
+// through the Owns() watch, re-enqueue the InferenceService into a
+// self-perpetuating loop. Nothing in the authored endpoint is defaulted — the
+// "writes the endpoint exactly as authored" spec pins that assumption against a
+// future CRD revision.
+func serviceMonitorNeedsUpdate(existing, desired client.Object) bool {
+	e, okE := existing.(*monitoringv1.ServiceMonitor)
+	d, okD := desired.(*monitoringv1.ServiceMonitor)
+	if !okE || !okD {
+		return true
+	}
+	return !apiequality.Semantic.DeepEqual(e.Labels, d.Labels) ||
+		!apiequality.Semantic.DeepEqual(e.Spec.Selector, d.Spec.Selector) ||
+		!apiequality.Semantic.DeepEqual(e.Spec.NamespaceSelector, d.Spec.NamespaceSelector) ||
+		!apiequality.Semantic.DeepEqual(e.Spec.Endpoints, d.Spec.Endpoints)
 }
 
 // serviceNeedsUpdate reports whether the controller-owned fields of an

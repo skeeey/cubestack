@@ -25,6 +25,7 @@ limitations under the License.
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=leaderworkerset.x-k8s.io,resources=leaderworkersets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
 package controller
 
@@ -36,6 +37,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -72,6 +75,26 @@ type InferenceServiceReconciler struct {
 	// HTTPRoutes of published services attach to.
 	GatewayName      string
 	GatewayNamespace string
+	// ServiceMonitorAvailable reports whether the cluster serves the
+	// monitoring.coreos.com ServiceMonitor CRD. The ServiceMonitors scraping
+	// the role Services are monitoring infrastructure, not part of the
+	// service: a cluster without the prometheus-operator CRDs must still
+	// reconcile its InferenceServices, so the apply step skips them instead
+	// of failing on an unknown kind. Probed once at startup.
+	ServiceMonitorAvailable bool
+}
+
+// ServiceMonitorAvailable reports whether the cluster serves the
+// monitoring.coreos.com ServiceMonitor CRD. The ServiceMonitors scraping the
+// role Services are optional monitoring infrastructure: where
+// prometheus-operator is not installed, the controller skips them rather than
+// failing every InferenceService on an unknown kind.
+func ServiceMonitorAvailable(mapper meta.RESTMapper) bool {
+	_, err := mapper.RESTMapping(
+		monitoringv1.SchemeGroupVersion.WithKind("ServiceMonitor").GroupKind(),
+		monitoringv1.SchemeGroupVersion.Version,
+	)
+	return err == nil
 }
 
 // Reconcile runs the render pipeline's generation steps (design §4.1 steps
@@ -278,13 +301,20 @@ func (r *InferenceServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := registerSharedIndexes(mgr); err != nil {
 		return err
 	}
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&aiv1alpha1.InferenceService{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&corev1.Secret{}).
 		Owns(&appsv1.Deployment{}).
-		Owns(&corev1.Service{}).
+		Owns(&corev1.Service{})
+	if r.ServiceMonitorAvailable {
+		// Owns() starts an informer on the kind: registering it where the CRD
+		// is not served would abort controller startup — the very failure the
+		// ServiceMonitorAvailable degradation exists to avoid.
+		b = b.Owns(&monitoringv1.ServiceMonitor{})
+	}
+	return b.
 		Watches(&aiv1alpha1.ModelVersion{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueReferencingServices)).
 		Watches(&aiv1alpha1.InferenceRuntimeProfile{},

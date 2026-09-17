@@ -81,10 +81,7 @@ func (r *InferenceServiceReconciler) checkEndpoint(ctx context.Context, isvc *ai
 		return check, err
 	}
 
-	portName := profile.Spec.Endpoint.PortName
-	if portName == "" {
-		portName = DefaultEndpointPortName
-	}
+	portName := endpointPortName(profile)
 	var port int32 = -1
 	for _, p := range svc.Spec.Ports {
 		if p.Name == portName {

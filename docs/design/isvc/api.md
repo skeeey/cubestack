@@ -746,8 +746,11 @@ env:
 | 创建 ConfigMap | `<isvc>-<asset>` | + `ai.cubestack.io/asset` |
 | 模型 PVC | `<isvc>-model-<key>` | + `ai.cubestack.io/model` |
 | S3 凭据 Secret 副本 | `<isvc>-model-<key>-credentials`（仅 `storage.strategy: S3` 且 `credentialsRef` 设置时） | 同模型 PVC |
+| ServiceMonitor（仅集群提供 `monitoring.coreos.com` CRD 时） | `<isvc>` | `ai.cubestack.io/{inference-service, managed-by: inference-Controller}` + `app.kubernetes.io/part-of: cubestack-observability` |
 
 全部带 ownerReference → InferenceService（GC 与 reconcile 归属）。
+
+**ServiceMonitor 抓取约定**：Controller 为每个 InferenceService 生成一个 ServiceMonitor，抓取端口名取 `endpoint.portName`（默认 `http`）、路径固定 `/metrics`，且只选择本 namespace 内本服务的 Service。因此 Profile 必须把引擎暴露指标的端口声明成与 `endpoint.portName` 同名的 Service 端口；端口名不一致的 role Service 会被 Prometheus 静默跳过（不报错，指标缺失）。selector 排除 headless Service（`<isvc>-<role>-hl`）：其 selector 不做 leader 过滤，endpoints 含组内 worker，而 worker 不服务该 role 的端点（§3.2 `roles[].service.headless`）。集群未安装 prometheus-operator 时不生成该对象，也不影响服务本体。
 
 #### role 到工作负载字段映射
 

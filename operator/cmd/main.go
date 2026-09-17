@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	aiv1alpha1 "github.com/suanova/cubestack/api/v1alpha1"
 	"github.com/suanova/cubestack/internal/controller"
 	leaderworkersetv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
@@ -53,6 +54,7 @@ func init() {
 	utilruntime.Must(aiv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(leaderworkersetv1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
+	utilruntime.Must(monitoringv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -212,6 +214,11 @@ func main() {
 		GatewayDomain:    gatewayDomain,
 		GatewayName:      gatewayName,
 		GatewayNamespace: gatewayNamespace,
+		// Probe the optional ServiceMonitor CRD once: where it is not served,
+		// the controller skips the scrape monitors instead of failing every
+		// InferenceService on an unknown kind. A cluster that installs the
+		// CRDs later needs an operator restart to pick them up.
+		ServiceMonitorAvailable: controller.ServiceMonitorAvailable(mgr.GetRESTMapper()),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "InferenceService")
 		os.Exit(1)

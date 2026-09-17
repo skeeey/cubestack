@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"maps"
 
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,6 +37,21 @@ import (
 // roleLabelKey is the controller-owned pod label selecting the role; it is
 // injected into the pod template and used as the Service selector.
 const roleLabelKey = "ai.cubestack.io/role"
+
+// headlessServiceLabelKey marks the headless role Service (<isvc>-<role>-hl).
+// The headless Service carries the same locating labels as its cluster-IP
+// sibling, so the ServiceMonitor's selector needs a discriminator to leave it
+// out: its endpoints include every worker of a group, and only a group's
+// leader serves the role's endpoint (see roleSelectorLabels).
+const headlessServiceLabelKey = "ai.cubestack.io/headless"
+
+// observabilityPartOfKey/Value label the ServiceMonitor that scrapes the role
+// Services. Prometheus selects ServiceMonitors by this value
+// (observability/docs/installer-requirements.md §1.2).
+const (
+	observabilityPartOfKey   = "app.kubernetes.io/part-of"
+	observabilityPartOfValue = "cubestack-observability"
+)
 
 // leaderWorkerIndex is the LWS worker-index label value of a group's leader.
 const leaderWorkerIndex = "0"
@@ -119,7 +136,54 @@ func desiredHeadlessService(isvc *aiv1alpha1.InferenceService, role *aiv1alpha1.
 	svc := desiredServiceWithSelector(isvc, role, controllerSelectorLabels(isvc.Name, role.Name), scheme)
 	svc.Name = fmt.Sprintf("%s-%s-hl", isvc.Name, role.Name)
 	svc.Spec.ClusterIP = corev1.ClusterIPNone
+	// Mark the headless sibling so the ServiceMonitor's selector can leave it
+	// out (see headlessServiceLabelKey).
+	svc.Labels[headlessServiceLabelKey] = "true"
 	return svc
+}
+
+// endpointPortName is the Service port name carrying the service's API — and,
+// for the engines this platform runs, their /metrics endpoint. The profile
+// names it (endpoint.portName, default http); every role Service declaring a
+// port of that name is scraped.
+func endpointPortName(profile *aiv1alpha1.InferenceRuntimeProfile) string {
+	if profile.Spec.Endpoint.PortName != "" {
+		return profile.Spec.Endpoint.PortName
+	}
+	return DefaultEndpointPortName
+}
+
+// desiredServiceMonitor builds the ServiceMonitor scraping the role Services of
+// this service. It lives in the service's own namespace and selects only from
+// it, so one service's monitor can never reach another's Services.
+func desiredServiceMonitor(isvc *aiv1alpha1.InferenceService, portName string, scheme *runtime.Scheme) *monitoringv1.ServiceMonitor {
+	sm := &monitoringv1.ServiceMonitor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      isvc.Name,
+			Namespace: isvc.Namespace,
+			Labels: map[string]string{
+				inferenceServiceLabelKey: isvc.Name,
+				managedByLabelKey:        managedByValue,
+				observabilityPartOfKey:   observabilityPartOfValue,
+			},
+		},
+		Spec: monitoringv1.ServiceMonitorSpec{
+			NamespaceSelector: monitoringv1.NamespaceSelector{MatchNames: []string{isvc.Namespace}},
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					inferenceServiceLabelKey: isvc.Name,
+					managedByLabelKey:        managedByValue,
+				},
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key:      headlessServiceLabelKey,
+					Operator: metav1.LabelSelectorOpDoesNotExist,
+				}},
+			},
+			Endpoints: []monitoringv1.Endpoint{{Port: portName, Path: "/metrics"}},
+		},
+	}
+	_ = ctrl.SetControllerReference(isvc, sm, scheme)
+	return sm
 }
 
 // desiredLWS builds the LeaderWorkerSet of a role (design §4.3 mapping table):
