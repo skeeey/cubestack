@@ -68,10 +68,10 @@ spec:
           # controllers. The helm chart renders these from its gateway.* values
           # instead, with the namespace always taken from the release
           # namespace.
-          # --gateway-domain is intentionally not set: publishing stays off
-          # (RouteReady=False, GatewayNotConfigured) until a domain is added
-          # via your overlay, e.g.:
-          #   - --gateway-domain=example.com
+          # --gateway-catalog-hostname is intentionally not set: publishing
+          # stays off (RouteReady=False, GatewayNotConfigured) until a catalog
+          # hostname is added via your overlay, e.g.:
+          #   - --gateway-catalog-hostname=ai.example.com
           - --gateway-name=cubestack-gateway
           - --gateway-namespace=cubestack-system
           # DevEnvironment L4 port pool. The helm chart renders these two

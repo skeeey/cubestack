@@ -35,6 +35,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	aigwv1beta1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	aiv1alpha1 "github.com/suanova/cubestack/api/v1alpha1"
 	leaderworkersetv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
@@ -66,6 +68,8 @@ var _ = BeforeSuite(func() {
 			filepath.Join("..", "..", "testdata", "lws-crd"),
 			filepath.Join("..", "..", "testdata", "gateway-crds"),
 			filepath.Join("..", "..", "testdata", "servicemonitor-crd"),
+			filepath.Join("..", "..", "testdata", "aigateway-crds"),
+			filepath.Join("..", "..", "testdata", "envoy-gateway-crds"),
 		},
 	}
 	// kube-apiserver 1.36 takes ~60s to exit on SIGTERM while informer
@@ -83,6 +87,8 @@ var _ = BeforeSuite(func() {
 	utilruntime.Must(leaderworkersetv1.AddToScheme(testScheme))
 	utilruntime.Must(gatewayv1.Install(testScheme))
 	utilruntime.Must(monitoringv1.AddToScheme(testScheme))
+	utilruntime.Must(aigwv1beta1.AddToScheme(testScheme))
+	utilruntime.Must(egv1alpha1.AddToScheme(testScheme))
 
 	k8sClient, err = client.New(cfg, client.Options{Scheme: testScheme})
 	Expect(err).NotTo(HaveOccurred())

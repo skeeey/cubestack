@@ -32,12 +32,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	aigwv1beta1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	aiv1alpha1 "github.com/suanova/cubestack/api/v1alpha1"
 )
 
-// convergenceReconciler returns a reconciler with the gateway flags set.
+// convergenceReconciler returns a reconciler with the gateway and model
+// catalog flags set.
 func convergenceReconciler() *InferenceServiceReconciler {
-	return &InferenceServiceReconciler{Client: k8sClient, Scheme: testScheme, GatewayDomain: testGatewayDomain, GatewayName: testGatewayName, GatewayNamespace: testGatewayNamespace}
+	return &InferenceServiceReconciler{
+		Client: k8sClient, Scheme: testScheme,
+		GatewayName: testGatewayName, GatewayNamespace: testGatewayNamespace,
+		CatalogHostname: testCatalogHostname, AgentRouterAvailable: true,
+	}
 }
 
 // reconcileConvergence reconciles the isvc directly, retrying the conflict the
@@ -93,6 +99,28 @@ func readyEndpoints(name string) {
 	Expect(k8sClient.Create(ctx, ep)).To(Succeed())
 }
 
+// acceptCatalogObjects marks the service's catalog objects accepted by the
+// Agent Router controller for their current generation: envtest runs no Agent
+// Router, so the spec writes the conditions it would. g is the Eventually
+// block's Gomega so a not-yet-created object retries instead of failing.
+func acceptCatalogObjects(g Gomega, name string) {
+	route := &aigwv1beta1.AIGatewayRoute{}
+	g.Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route)).To(Succeed())
+	route.Status.Conditions = []metav1.Condition{{
+		Type: aigwv1beta1.ConditionTypeAccepted, Status: metav1.ConditionTrue, Reason: aiAcceptedReason,
+		LastTransitionTime: metav1.Now(), ObservedGeneration: route.Generation,
+	}}
+	g.Expect(k8sClient.Status().Update(ctx, route)).To(Succeed())
+
+	sb := &aigwv1beta1.AIServiceBackend{}
+	g.Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-backend", Namespace: testNamespace}, sb)).To(Succeed())
+	sb.Status.Conditions = []metav1.Condition{{
+		Type: aigwv1beta1.ConditionTypeAccepted, Status: metav1.ConditionTrue, Reason: aiAcceptedReason,
+		LastTransitionTime: metav1.Now(), ObservedGeneration: sb.Generation,
+	}}
+	g.Expect(k8sClient.Status().Update(ctx, sb)).To(Succeed())
+}
+
 var _ = Describe("convergence", func() {
 	BeforeEach(func() { ensureSystemNamespace() })
 
@@ -122,40 +150,30 @@ var _ = Describe("convergence", func() {
 		Expect(meta.FindStatusCondition(got.Status.Conditions, aiv1alpha1.ConditionProgressing).Status).To(Equal(metav1.ConditionTrue))
 	})
 
-	It("publishes an HTTPRoute for a published service with a ready endpoint", func() {
+	It("publishes the catalog objects for a published service with a ready endpoint", func() {
 		name := "conv-publish"
 		convergenceISVC(name, true)
 
 		Expect(reconcileConvergence(name)).To(Succeed())
 		readyEndpoints(name)
 
-		// The suite's manager reconciles the same isvc without the gateway
-		// flags, so the route it publishes (empty hostname) can race this
-		// spec's — poll the reconcile + assertions until they win.
+		// The suite's manager reconciles the same isvc without the Agent
+		// Router probe, so the status it writes (AgentRouterUnavailable, no
+		// public endpoint) can race this spec's — poll the reconcile plus
+		// assertions until they win.
 		Eventually(func(g Gomega) {
 			g.Expect(reconcileConvergence(name)).To(Succeed())
-			route := &gatewayv1.HTTPRoute{}
+			route := &aigwv1beta1.AIGatewayRoute{}
 			g.Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route)).To(Succeed())
-			g.Expect(route.Spec.Hostnames).To(Equal([]gatewayv1.Hostname{"conv-flash.example.com"}))
-			// No gateway controller runs in envtest — accept the route
-			// directly so RouteReady can converge.
-			route.Status.Parents = []gatewayv1.RouteParentStatus{{
-				ParentRef: gatewayv1.ParentReference{
-					Name:      gatewayv1.ObjectName(testGatewayName),
-					Namespace: ptrTo(gatewayv1.Namespace(testGatewayNamespace)),
-				},
-				ControllerName: gatewayv1.GatewayController("example.net/gateway-controller"),
-				Conditions: []metav1.Condition{
-					{Type: string(gatewayv1.RouteConditionAccepted), Status: metav1.ConditionTrue, Reason: "Accepted", LastTransitionTime: metav1.Now()},
-					{Type: string(gatewayv1.RouteConditionResolvedRefs), Status: metav1.ConditionTrue, Reason: "ResolvedRefs", LastTransitionTime: metav1.Now()},
-				},
-			}}
-			g.Expect(k8sClient.Status().Update(ctx, route)).To(Succeed())
+			g.Expect(route.Spec.Hostnames).To(Equal([]gatewayv1.Hostname{testCatalogHostname}))
+			// No Agent Router controller runs in envtest — accept the catalog
+			// objects directly so RouteReady can converge.
+			acceptCatalogObjects(g, name)
 			g.Expect(reconcileConvergence(name)).To(Succeed())
 			got := &aiv1alpha1.InferenceService{}
 			g.Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: testNamespace}, got)).To(Succeed())
 			g.Expect(meta.FindStatusCondition(got.Status.Conditions, aiv1alpha1.ConditionRouteReady).Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(got.Status.Endpoint.Public).To(Equal("https://conv-flash.example.com"))
+			g.Expect(got.Status.Endpoint.Public).To(Equal("https://" + testCatalogHostname))
 		}, "15s", "200ms").Should(Succeed())
 	})
 

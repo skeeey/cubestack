@@ -196,18 +196,26 @@ func modelVars(model *aiv1alpha1.ModelVersion) map[string]string {
 	}
 }
 
+// routeVars renders the route.<name> variables of the templates. The defaults
+// mirror the RouteSpec CRD defaults: an unset timeoutSeconds caps nothing and
+// an unset idleTimeoutSeconds bounds the stream at 300s.
 func routeVars(route *aiv1alpha1.RouteSpec) map[string]string {
 	if route == nil {
-		return map[string]string{"publish": "false", "modelName": "", "timeoutSeconds": "60"}
+		return map[string]string{"publish": "false", "modelName": "", "timeoutSeconds": "0", "idleTimeoutSeconds": "300"}
 	}
-	timeout := "60"
+	timeout := "0"
 	if route.TimeoutSeconds != nil {
 		timeout = strconv.FormatInt(*route.TimeoutSeconds, 10)
 	}
+	idle := "300"
+	if route.IdleTimeoutSeconds != nil {
+		idle = strconv.FormatInt(*route.IdleTimeoutSeconds, 10)
+	}
 	return map[string]string{
-		"publish":        strconv.FormatBool(route.Publish),
-		"modelName":      route.ModelName,
-		"timeoutSeconds": timeout,
+		"publish":            strconv.FormatBool(route.Publish),
+		"modelName":          route.ModelName,
+		"timeoutSeconds":     timeout,
+		"idleTimeoutSeconds": idle,
 	}
 }
 

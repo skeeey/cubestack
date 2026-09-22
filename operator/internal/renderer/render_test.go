@@ -300,3 +300,39 @@ var _ = Describe("Render", func() {
 		Expect(res.Errors[0].Reason).To(Equal(ReasonUnknownPlaceholder))
 	})
 })
+
+var _ = Describe("routeVars", func() {
+	It("reports an unpublished route and the defaults when spec.route is unset", func() {
+		vars := routeVars(nil)
+		Expect(vars).To(HaveLen(4))
+		Expect(vars).To(HaveKeyWithValue("publish", "false"))
+		Expect(vars).To(HaveKeyWithValue("modelName", ""))
+		Expect(vars).To(HaveKeyWithValue("timeoutSeconds", "0"))
+		Expect(vars).To(HaveKeyWithValue("idleTimeoutSeconds", "300"))
+	})
+
+	It("defaults the timeouts of a route that declares none", func() {
+		// 0 disables the total-duration cap; the idle cap keeps its 300s default.
+		vars := routeVars(&aiv1alpha1.RouteSpec{Publish: true, ModelName: "flash"})
+		Expect(vars).To(HaveLen(4))
+		Expect(vars).To(HaveKeyWithValue("publish", "true"))
+		Expect(vars).To(HaveKeyWithValue("modelName", "flash"))
+		Expect(vars).To(HaveKeyWithValue("timeoutSeconds", "0"))
+		Expect(vars).To(HaveKeyWithValue("idleTimeoutSeconds", "300"))
+	})
+
+	It("renders the declared route values", func() {
+		route := &aiv1alpha1.RouteSpec{
+			Publish:            true,
+			ModelName:          "qwen38-27b",
+			TimeoutSeconds:     ptrTo(int64(3600)),
+			IdleTimeoutSeconds: ptrTo(int64(120)),
+		}
+		vars := routeVars(route)
+		Expect(vars).To(HaveLen(4))
+		Expect(vars).To(HaveKeyWithValue("publish", "true"))
+		Expect(vars).To(HaveKeyWithValue("modelName", "qwen38-27b"))
+		Expect(vars).To(HaveKeyWithValue("timeoutSeconds", "3600"))
+		Expect(vars).To(HaveKeyWithValue("idleTimeoutSeconds", "120"))
+	})
+})

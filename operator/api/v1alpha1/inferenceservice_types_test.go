@@ -47,9 +47,9 @@ func validInferenceService(name string) *InferenceService {
 				"maxModelLen":     {Raw: []byte("131072")},
 			},
 			Route: &RouteSpec{
-				Publish:        true,
-				ModelName:      "dsv4-flash",
-				TimeoutSeconds: ptrTo(int64(60)),
+				Publish:            true,
+				ModelName:          "dsv4-flash",
+				IdleTimeoutSeconds: ptrTo(int64(300)),
 			},
 		},
 	}
@@ -84,7 +84,7 @@ var _ = Describe("InferenceService", func() {
 			Expect(k8sClient.Delete(ctx, isvc)).To(Succeed())
 		})
 
-		It("defaults route publish to false and timeoutSeconds to 60", func() {
+		It("defaults route publish to false, timeoutSeconds to 0 and idleTimeoutSeconds to 300", func() {
 			isvc := validInferenceService("isvc-defaults")
 			isvc.Spec.Route = &RouteSpec{ModelName: "dsv4-flash"}
 
@@ -93,8 +93,17 @@ var _ = Describe("InferenceService", func() {
 			got := &InferenceService{}
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: isvc.Name, Namespace: testNamespace}, got)).To(Succeed())
 			Expect(got.Spec.Route.Publish).To(BeFalse())
-			Expect(*got.Spec.Route.TimeoutSeconds).To(Equal(int64(60)))
+			Expect(*got.Spec.Route.TimeoutSeconds).To(Equal(int64(0)))
+			Expect(*got.Spec.Route.IdleTimeoutSeconds).To(Equal(int64(300)))
 
+			Expect(k8sClient.Delete(ctx, isvc)).To(Succeed())
+		})
+
+		It("accepts a catalog modelName with dots and uppercase", func() {
+			isvc := validInferenceService("isvc-model-name-catalog")
+			isvc.Spec.Route.ModelName = "Qwen3.8-27B"
+
+			Expect(k8sClient.Create(ctx, isvc)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, isvc)).To(Succeed())
 		})
 
@@ -194,22 +203,26 @@ var _ = Describe("InferenceService", func() {
 				"isvc-invalid-profile-ref-dash",
 				func(s *InferenceServiceSpec) { s.ProfileRef = "metax-sglang-" },
 				"spec.profileRef"),
-			Entry("modelName with uppercase",
-				"isvc-invalid-model-name-case",
-				func(s *InferenceServiceSpec) { s.Route.ModelName = "DsV4" },
+			Entry("modelName with a space",
+				"isvc-invalid-model-name-space",
+				func(s *InferenceServiceSpec) { s.Route.ModelName = "dsv4 flash" },
 				"spec.route.modelName"),
-			Entry("modelName with dot",
-				"isvc-invalid-model-name-dot",
-				func(s *InferenceServiceSpec) { s.Route.ModelName = "dsv4.flash" },
+			Entry("modelName with a leading dot",
+				"isvc-invalid-model-name-dot-prefix",
+				func(s *InferenceServiceSpec) { s.Route.ModelName = ".dsv4" },
 				"spec.route.modelName"),
-			Entry("timeoutSeconds zero",
-				"isvc-invalid-timeout-zero",
-				func(s *InferenceServiceSpec) { *s.Route.TimeoutSeconds = 0 },
+			Entry("timeoutSeconds negative",
+				"isvc-invalid-timeout-negative",
+				func(s *InferenceServiceSpec) { s.Route.TimeoutSeconds = ptrTo(int64(-1)) },
 				"spec.route.timeoutSeconds"),
 			Entry("timeoutSeconds too large",
 				"isvc-invalid-timeout-large",
-				func(s *InferenceServiceSpec) { *s.Route.TimeoutSeconds = 86401 },
+				func(s *InferenceServiceSpec) { s.Route.TimeoutSeconds = ptrTo(int64(86401)) },
 				"spec.route.timeoutSeconds"),
+			Entry("idleTimeoutSeconds zero",
+				"isvc-invalid-idle-zero",
+				func(s *InferenceServiceSpec) { *s.Route.IdleTimeoutSeconds = 0 },
+				"spec.route.idleTimeoutSeconds"),
 		)
 	})
 })

@@ -486,8 +486,8 @@ Controller 将此模板按 `workload.kind` 写入对应位置：`LeaderWorkerSet
 | 字段 | 类型 | 校验规则 | 说明 |
 |---|---|---|---|
 | `vars` | map | L0：可选 | 管理员定义的模板常量。可在模板中通过 `{{ profile.vars.<key> }}` 引用，适合存放多个 role 共用的配置。 |
-| `endpoint.role` | string | L0：必填；L1：必须存在于 `roles`，且该 role 须定义 `service` | 作为服务对外端点的 role 名称。Controller 以该 role 的 Service 作为内部端点（InferenceService 的 `status.endpoint.internal`）；`publish: true` 时，它同时作为 HTTPRoute 的后端。渲染后 Service 的可解析性由 `EndpointReady` 校验（见 §3.3）。 |
-| `endpoint.portName` | string | L0：可选，默认 `http`；L2：渲染后须存在于端点 Service 的端口中（`EndpointReady`） | 对外端点使用的 Service 端口名，与 `endpoint.role` 一起确定 HTTPRoute 的后端端口。 |
+| `endpoint.role` | string | L0：必填；L1：必须存在于 `roles`，且该 role 须定义 `service` | 作为服务对外端点的 role 名称。Controller 以该 role 的 Service 作为内部端点（InferenceService 的 `status.endpoint.internal`）；`publish: true` 时，它同时是模型目录条目的后端（目录对象的 endpoints 指向该 Service）。渲染后 Service 的可解析性由 `EndpointReady` 校验（见 §3.3）。 |
+| `endpoint.portName` | string | L0：可选，默认 `http`；L2：渲染后须存在于端点 Service 的端口中（`EndpointReady`） | 对外端点使用的 Service 端口名，与 `endpoint.role` 一起确定目录条目后端的端口。 |
 | `readinessPolicy.requireAllRoles` | bool | L0：v1alpha1 固定 `true` | 服务就绪条件的聚合方式：所有 role 的工作负载和 Pod 都就绪后，InferenceService 才会标记为 Ready。 |
 | `podAntiAffinity` | object | L0：可选；`topologyKey` 必填且为合法 K8s label key | 同服务 Pod 反亲和：`{topologyKey}`。本服务**全部 role** 的 Pod（leader/worker、跨组、跨 role）在声明的拓扑域内互不共置（`requiredDuringSchedulingIgnoredDuringExecution`）——声明一次，Controller 将其注入每个 role 的 PodSpec，保证是互斥的双向约束。labelSelector 由平台固定为本服务（`ai.cubestack.io/inference-service`），不可自定义——用于多副本组异机/异域散布；单副本无效果。与 `accelerator.models` 的 nodeSelector/nodeAffinity（§3.2）按 K8s AND 语义叠加。 |
 
@@ -547,8 +547,9 @@ spec:
     maxModelLen: 131072
   route:
     publish: true
-    modelName: dsv4-flash
-    timeoutSeconds: 60
+    modelName: dsv4-flash     # 目录模型名：客户端请求体的 model 字段填该值
+    timeoutSeconds: 0         # 0 = 不设总时长上限（默认）
+    idleTimeoutSeconds: 300   # 无进展上限（默认）
 ```
 
 #### 字段
@@ -558,9 +559,10 @@ spec:
 | `spec.modelRef` | string | L0：必填、对象名格式；L2：引用存在性与兼容性（`Resolved`） | 引用 ModelVersion。ModelVersion 的 spec 不可变，因此修改此字段就是切换模型版本，用于升级或回滚。 |
 | `spec.profileRef` | string | L0：必填、对象名格式；L2：引用存在性（`Resolved`） | 引用 InferenceRuntimeProfile。Profile 的 spec 不可变，因此修改此字段就是切换运行配置版本，用于升级或回滚。 |
 | `spec.overrides` | map | L2：key 和 value 对照 Profile 的 `overrides[]` 声明校验（`Rendered`），未知 key 或不合法的值在 reconcile 时被拒绝 | 用户填写的可调参数。 |
-| `spec.route.publish` | bool | L0：可选，默认 `false` | 网关公开服务。未发布的服务只提供 ClusterIP 内部端点。 |
-| `spec.route.modelName` | string | L0：RFC1123 单 label（`[a-z0-9-]`）；L1：`publish: true` 时必填；L2：已发布服务的全平台唯一性（`RouteReady`） | 对外模型别名，同时用于生成 hostname `<modelName>.<平台域名>`。客户端请求中的 `model` 必须与它相同，否则返回 404；单 label 以确保 hostname 可被平台的单级通配 TLS 证书覆盖。未发布时可省略，省略后引擎使用 ModelVersion 的 `spec.model`；未发布服务使用各自的 ClusterIP，不会相互影响。 |
-| `spec.route.timeoutSeconds` | int | L0：可选，范围 1–86400，默认 60 | 网关请求超时，单位秒。 |
+| `spec.route.publish` | bool | L0：可选，默认 `false` | 发布到平台模型目录（Agent Router）。已发布服务成为目录里的一个模型：全平台共享同一个目录入口 hostname，客户端用请求体里的 `model` 字段选服务。未发布的服务只提供 ClusterIP 内部端点。 |
+| `spec.route.modelName` | string | L0：`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`（首字符字母数字，可含 `.` `_` `/` `-`，长度 ≤128）；L1：`publish: true` 时必填；L2：已发布服务的全平台唯一性（`RouteReady`） | 目录模型名，即客户端请求体 `model` 字段要填的值，也是已发布服务的全平台身份。与引擎的 served model name 解耦（目录条目把请求的 model 改写为引擎名）：同一模型的不同版本（fp16 / w8a8）能以各自的目录名共存，客户端只认目录名，`model` 不等于任何已发布服务的目录名时返回 404。未发布时可省略，省略后引擎使用 ModelVersion 的 `spec.model`；未发布服务使用各自的 ClusterIP，不会相互影响。 |
+| `spec.route.timeoutSeconds` | int | L0：可选，范围 0–86400，默认 0（0 = 不设总时长上限） | 单个请求的**总时长**上限，单位秒，包含全部流式分片。 |
+| `spec.route.idleTimeoutSeconds` | int | L0：可选，范围 1–86400，默认 300 | 单个请求的**无进展**上限，单位秒：上游连续这么久没有发出任何字节即切断。非流式生成在响应完成前不发送任何字节，因此一直被它计时——非流式长生成的实际上限由它决定（要更久就调大）；流式只要有字节流动就不受它约束，其时长的上限由 `timeoutSeconds` 决定。 |
 
 #### Status
 
@@ -623,7 +625,7 @@ status:
     ready: false
   endpoint:
     internal: "dsv4-flash-pd-router.project-a.svc:8001"
-    public: "https://dsv4-flash.maas.example.com"     # 仅 publish=true
+    public: "https://ai.cubestack.dev"     # 仅 publish=true：模型目录的共享入口；模型名见 spec.route.modelName
   assets:             # 创建来源与内容 hash（审计链）
   - name: runtime-config
     source: metax-dsv4-runtime-v0.5.12-rc1
@@ -641,7 +643,7 @@ status:
 | `Provisioned` | 渲染后的 asset ConfigMap、模型 PVC 与 S3 凭据 Secret 副本（§3.1 S3 策略）已在服务 namespace 中创建成功；源 Secret 轮换后副本的重新同步同样由该 condition 反映。仅指对象创建/同步成功；PVC 的绑定与存储供给由存储系统完成，其异常通过 Pod 事件体现。 | `AssetConfigMapFailed`、`PVCCreateFailed`、`SecretCopyFailed` |
 | `WorkloadsApplied` | 期望配置已完整写入 Service 与工作负载（LWS/Deployment），即渲染结果已下发到期望版本。只表示配置已应用，不表示就绪：滚动更新期间保持 `True`，Pod 未就绪由 `Ready` 与 `roles[]` 反映。 | `ServiceApplyFailed`、`WorkloadApplyFailed` |
 | `EndpointReady` | 无论 `publish` 取值，内部端点都必须实际可访问：`endpoint.role` 渲染后指向存在的 role，该 role 的 Service 中存在名为 `endpoint.portName`（默认 `http`）的端口，且该 Service 至少有一个就绪的后端端点（对应 Pod 已通过就绪探针）。该 condition 决定 `status.endpoint.internal` 是否有效；`RouteReady` 仅在它为 True 后才在网关上创建路由。 | `EndpointRoleNotFound`、`EndpointPortNotFound`、`EndpointNotReady` |
-| `RouteReady` | 仅覆盖网关侧的公开路由发布。`publish: true` 时，`modelName` 在发布范围内唯一，且以 `EndpointReady` 解析出的 Service 端口为后端的 HTTPRoute **已生成并被网关接受**（依赖 `EndpointReady=True`；接受 = 路由 `status.parents` 中匹配网关的条目 `Accepted=True` 且 `ResolvedRefs=True`）；`modelName` 与他人冲突时，保留先占用者当前有效的 HTTPRoute，本服务保持 False。等待网关接受期间为 `False`，reason 为 `GatewayNotAccepted`；平台网关未配置或网关 CRD 缺失时降级为 `False`，reason 为 `GatewayNotConfigured`。`publish: false` 时为 `True`，reason 为 `NotPublished`，表示未请求创建公开路由。 | `ModelNameConflict`、`GatewayNotAccepted`、`GatewayNotConfigured`、`EndpointNotReady` |
+| `RouteReady` | 仅覆盖模型目录里的公开条目。`publish: true` 时，`modelName` 在已发布服务中全平台唯一，且三个目录对象**已生成并被 Agent Router 接受**：EG `Backend` `<isvc>-endpoint`、`AIServiceBackend` `<isvc>-backend`、`AIGatewayRoute` `<isvc>-route`（均以 `EndpointReady` 解析出的 Service 端口为后端；接受 = `AIGatewayRoute` 与 `AIServiceBackend` 的 `Accepted` 条件均为 `True`，任一未接受即为 False，依赖 `EndpointReady=True`）；`modelName` 与他人冲突时，保留先占用者当前有效的目录条目，本服务保持 False。等待接受期间为 `False`，reason 为 `GatewayNotAccepted`；集群未安装 Agent Router CRD 时降级为 `False`，reason 为 `AgentRouterUnavailable`；目录入口 hostname 未配置（或网关未配置、网关 CRD 缺失）时降级为 `False`，reason 为 `GatewayNotConfigured`。`publish: false` 时为 `True`，reason 为 `NotPublished`，表示未请求发布目录条目。 | `ModelNameConflict`、`GatewayNotAccepted`、`AgentRouterUnavailable`、`GatewayNotConfigured`、`EndpointNotReady` |
 | `Ready` | 按 `readinessPolicy.requireAllRoles` 聚合。v1 要求所有 role 的工作负载（LWS/Deployment）和 Pod 都就绪。 | `RolesNotReady`（message 包含各 role 的状态） |
 | `Progressing` | spec 变更后，Controller 是否仍在应用期望配置。该条件与 `Ready` 独立。 | `True`：`Reconciling`、`Rollout` 或 `Scaling`；`False`：`Converged` |
 | `ProfileDeprecated`（警示） | 引用的 Profile 带有 deprecated label（`ai.cubestack.io/deprecated`）。 | 不阻断；提示迁移 |
@@ -667,6 +669,7 @@ Controller 监听 `InferenceService` 及其引用关系的变化、解析引用�
 - `InferenceRuntimeProfile` / `ModelVersion`：平台管理员可写（create/update/delete）；用户可读（get/list）；controller 需要 get/list/watch 和 status 写权限；
 - `cubestack-system` namespace 下的 `ConfigMap`：平台管理员可写（create/update/delete）；controller 需要 get/list/watch 和 status 写权限；
 - `InferenceService`：用户可在各自 namespace 创建；
+- `publish: true` 的服务，Controller 需要在服务 namespace 创建三个模型目录对象的权限（get/list/watch/create/update/patch/delete）：`gateway.envoyproxy.io` 的 `backends`、`aigateway.envoyproxy.io` 的 `aiservicebackends` 与 `aigatewayroutes`；另外需要 `gateway.networking.k8s.io` 的 `httproutes` 删除权限——清理 owner 为本服务的旧 per-model hostname 路由，`publish` 两种取值下都执行（见模型目录发布设计 D2）。
 - Controller 需要在用户 namespace 下创建 LWS/Deployment/Service/ConfigMap/PVC 的权限。
 - `Static` 策略下，controller 需要读取 operator 配置引用的 Ceph 凭据（rook-ceph namespace 中的 Secret/ConfigMap）并访问 Ceph mon，用于 subvolume 的 `getpath` 与 quota 只读解析。
 - 静态 PV 的 controller 自动化（§7 TODO）落地后，controller 还需要 `persistentvolumes` 的 create/delete 权限。
@@ -699,10 +702,11 @@ Controller 监听 `InferenceService` 及其引用关系的变化、解析引用�
  5) 端点可达性      endpoint.role 的 Service endpoints ≥ 1 ready
         │ (EndpointReady)
         ▼
- 6) 路由发布        仅 publish=true 且 EndpointReady=True
-                    - modelName 全局唯一性（冲突保留先占用者的路由，本服务 False）
-                    - 在网关创建/更新 HTTPRoute，并等待网关接受
-                      （status.parents 的 Accepted 与 ResolvedRefs 均为 True）
+ 6) 目录发布        仅 publish=true 且 EndpointReady=True
+                    - modelName 全平台唯一性（冲突保留先占用者的目录条目，本服务 False）
+                    - 创建/更新三个目录对象（Backend / AIServiceBackend / AIGatewayRoute）
+                      并等待 Agent Router 接受
+                      （AIServiceBackend 与 AIGatewayRoute 的 Accepted 均为 True）
         │ (RouteReady)
         ▼
  7) 聚合 status     roles[] / endpoint / revision / observedGeneration
@@ -715,7 +719,7 @@ Controller 监听 `InferenceService` 及其引用关系的变化、解析引用�
 - **生成步骤（1-4）**：任何一步失败，置对应 condition（False + reason），不生成/不更新后续资源。
 - **收敛步骤（5–7）**：失败只影响自身 condition（如 `EndpointNotReady`、`ModelNameConflict`），不阻塞其他 role 的 status 聚合，也不回滚已创建的资源。
 
-**路由生命周期**："端点可达后再配路由"仅约束首次创建。HTTPRoute 创建后，其生命周期跟随 Service：即使 `EndpointReady` 后续变为 False（如滚动更新期间 endpoints 抖动），也不删除已创建的 HTTPRoute，由网关健康检查完成摘流；否则滚动期间删除路由会导致 hostname 直接 `404`。
+**路由生命周期**："端点可达后再配路由"仅约束首次创建。目录条目创建后，其生命周期跟随 Service：即使 `EndpointReady` 后续变为 False（如滚动更新期间 endpoints 抖动），也不删除已创建的目录对象，由 Agent Router 的健康检查完成摘流；否则滚动期间删除条目会让该模型在目录入口直接 `404`。
 
 ### 4.2 替换规则
 
@@ -880,7 +884,7 @@ ModelVersion 与 InferenceRuntimeProfile 的 spec 均不可变（§3.1、§3.2�
 - **更新 LWS role**（模型或运行配置升级，如 prefill/decode）：`replicas ≥ 2` 时通常不中断；`replicas = 1` 时是一次计划内中断。PD 场景下整条流水线的可用性取决于冗余最少的 role：prefill 为单副本时，即使 decode 有冗余，prefill 更新期间整条流水线也会停止生成。
 - **更新端点 role**（如 PD router）：端点 role 按 §5.1 的顺序最后更新，其更新窗口发生在升级流程的末段。router 为 CPU-only HTTP 入口，流量经 Service 与网关转发，不应使用 hostNetwork（见 §3.2 `podTemplate.hostNetwork`），因此与 LWS 使用相同的滚动策略：`replicas ≥ 2` 时更新不停止服务，`replicas = 1` 时是计划内中断（等价 Recreate）。
 - **拓扑变化**（切换到 role 集合不同的 Profile）：被清理的旧 role 立即终止（§5.1）；若它在数据路径上（例如端点 role 更名），服务从旧 role 删除到新 role 就绪之间中断。
-- **修改公开名称（`modelName`）**：会产生两类 404。其一，滚动期间网关已使用新 hostname，但旧 Pod 仍使用旧的 `served-model-name`，请求命中旧 Pod 时返回 404，直到全部 Pod 更新完成；其二，hostname 由 `modelName` 生成（§3.3），旧公开地址在新路由生效后立即失效，客户端必须改用新地址与新 model 名。
+- **修改公开名称（`modelName`）**：改变的是客户端请求体里的 `model` 值，目录入口 hostname 不变。旧目录名在新条目生效后立即失效，该 model 名的请求返回 404，客户端必须改用新名。另外，若 Profile 的模板引用了 `{{ route.modelName }}`（模板 hash 随之变化，触发滚动），滚动期间新目录名的请求仍可能命中尚未更新的旧 Pod，直到全部 Pod 更新完成前返回 404。
 - **回滚耗时与升级相当**：滚动过程中切回旧版本会再次触发完整滚动。大模型加载通常需要数十分钟，因此灰度计划应把升级和可能回滚的时间都计入中断预算；回滚还要求旧 ModelVersion 与旧 InferenceRuntimeProfile 仍然存在（见 §3.1、§3.2 的删除注意事项）。
 
 **结论**：v1alpha1 可以通过冗余在更新时保留 LWS role 的服务能力——关键 role（尤其是 PD 的 prefill）应配置至少两个副本。但以下情形仍是计划内中断：单副本 role 更新、拓扑变化中被清理的 role，以及需要整体重建的 PVC 存储变更（§5.1）。完整零中断需要 `maxSurge = 1`（更新期间占用双倍 GPU）或服务级蓝绿切流（新旧两套服务并存、由网关按权重切流），两者都需要额外的 GPU 容量或网关能力，不在 v1alpha1 范围内。

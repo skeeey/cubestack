@@ -17,24 +17,58 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	aigwv1beta1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	aiv1alpha1 "github.com/suanova/cubestack/api/v1alpha1"
 )
 
+// notYetObservedClient models the manager's informer-cached client right after a
+// write: an object this client created is persisted, but a Get for it still
+// misses because the cache has not observed it yet. Reads of objects it did not
+// create go through unchanged, so the spec exercises the create path only.
+type notYetObservedClient struct {
+	client.Client
+	created map[client.ObjectKey]bool
+}
+
+func (c *notYetObservedClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if err := c.Client.Create(ctx, obj, opts...); err != nil {
+		return err
+	}
+	c.created[client.ObjectKeyFromObject(obj)] = true
+	return nil
+}
+
+func (c *notYetObservedClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if c.created[key] {
+		return apierrors.NewNotFound(schema.GroupResource{Group: "aigateway.envoyproxy.io", Resource: "objects"}, key.Name)
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
 // Gateway configuration shared by the checkRoute specs.
 const (
-	testGatewayDomain    = "example.com"
 	testGatewayName      = "platform"
 	testGatewayNamespace = "cubestack-system"
-	testRouteHostname    = "flash.example.com"
+	testCatalogHostname  = "ai.example.com"
+	// testEngineModel is the engine's served model name the reconcile reads
+	// from the ModelVersion and writes into the catalog entry as the
+	// modelNameOverride of the backendRef.
+	testEngineModel = "flash-engine"
 )
 
 func routeISVC(name string, publish bool) *aiv1alpha1.InferenceService {
@@ -48,30 +82,47 @@ func routeProfile(name string) *aiv1alpha1.InferenceRuntimeProfile {
 }
 
 // routeReconciler returns the reconciler under test with the platform gateway
-// configured.
+// and the model catalog configured.
 func routeReconciler() *InferenceServiceReconciler {
-	return &InferenceServiceReconciler{Client: k8sClient, Scheme: testScheme, GatewayDomain: testGatewayDomain, GatewayName: testGatewayName, GatewayNamespace: testGatewayNamespace}
+	return &InferenceServiceReconciler{Client: k8sClient, Scheme: testScheme, GatewayName: testGatewayName, GatewayNamespace: testGatewayNamespace, CatalogHostname: testCatalogHostname, AgentRouterAvailable: true}
 }
 
-// acceptRoute marks the route accepted by the platform gateway for its current
-// generation: envtest runs no gateway controller, so the specs write
-// status.parents directly (ObservedGeneration pins the status to the
-// generation it was written for, like a real gateway controller would).
+// aiAcceptedReason is the reason the Agent Router controller writes on the
+// conditions it accepts: ai-gateway's newConditions writes a fixed
+// "ReconciliationSucceeded" and puts the detail in the message.
+const aiAcceptedReason = "ReconciliationSucceeded"
+
+// acceptRoute marks the catalog objects accepted by the Agent Router
+// controller for their current generation: envtest runs no Agent Router, so
+// the specs write the conditions the controller would.
 func acceptRoute(name string) {
-	route := &gatewayv1.HTTPRoute{}
+	acceptAIGatewayRoute(name)
+	acceptAIServiceBackend(name)
+}
+
+// acceptAIGatewayRoute writes the Accepted condition the Agent Router
+// controller would set on the service's catalog entry (ObservedGeneration pins
+// the status to the generation it was written for).
+func acceptAIGatewayRoute(name string) {
+	route := &aigwv1beta1.AIGatewayRoute{}
 	Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route)).To(Succeed())
-	route.Status.Parents = []gatewayv1.RouteParentStatus{{
-		ParentRef: gatewayv1.ParentReference{
-			Name:      gatewayv1.ObjectName(testGatewayName),
-			Namespace: ptrTo(gatewayv1.Namespace(testGatewayNamespace)),
-		},
-		ControllerName: gatewayv1.GatewayController("example.net/gateway-controller"),
-		Conditions: []metav1.Condition{
-			{Type: string(gatewayv1.RouteConditionAccepted), Status: metav1.ConditionTrue, Reason: "Accepted", LastTransitionTime: metav1.Now(), ObservedGeneration: route.Generation},
-			{Type: string(gatewayv1.RouteConditionResolvedRefs), Status: metav1.ConditionTrue, Reason: "ResolvedRefs", LastTransitionTime: metav1.Now(), ObservedGeneration: route.Generation},
-		},
+	route.Status.Conditions = []metav1.Condition{{
+		Type: aigwv1beta1.ConditionTypeAccepted, Status: metav1.ConditionTrue, Reason: aiAcceptedReason,
+		LastTransitionTime: metav1.Now(), ObservedGeneration: route.Generation,
 	}}
 	Expect(k8sClient.Status().Update(ctx, route)).To(Succeed())
+}
+
+// acceptAIServiceBackend writes the Accepted condition the Agent Router
+// controller would set on the service's AIServiceBackend.
+func acceptAIServiceBackend(name string) {
+	sb := &aigwv1beta1.AIServiceBackend{}
+	Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-backend", Namespace: testNamespace}, sb)).To(Succeed())
+	sb.Status.Conditions = []metav1.Condition{{
+		Type: aigwv1beta1.ConditionTypeAccepted, Status: metav1.ConditionTrue, Reason: aiAcceptedReason,
+		LastTransitionTime: metav1.Now(), ObservedGeneration: sb.Generation,
+	}}
+	Expect(k8sClient.Status().Update(ctx, sb)).To(Succeed())
 }
 
 var _ = Describe("checkRoute", func() {
@@ -79,133 +130,189 @@ var _ = Describe("checkRoute", func() {
 		return &endpointCheck{Internal: name + "-router.default.svc:8001", Role: testApplyRouterRole}
 	}
 
-	It("reports NotPublished and deletes an existing route when publish is false", func() {
+	It("reports NotPublished and deletes the catalog objects when publish is false", func() {
 		name := "route-off"
 		Expect(k8sClient.Create(ctx, routeISVC(name, false))).To(Succeed())
 		r := routeReconciler()
-		// The route must be owned by the in-cluster isvc (the ownerRef needs
-		// its UID), so it is built from the fetched object; Publish is flipped
-		// on the local copy to model the route published before publishing was
-		// turned off.
+		// The catalog objects must be owned by the in-cluster isvc (the
+		// ownerRef needs its UID), so they are built from the fetched object;
+		// Publish is flipped on the local copy to model a service that was
+		// published before publishing was turned off.
 		isvc := mustGetISVC(ctx, name)
 		isvc.Spec.Route.Publish = true
-		old := r.desiredHTTPRoute(isvc, routeProfile(name+"-prof"), 8001)
-		Expect(k8sClient.Create(ctx, old)).To(Succeed())
+		Expect(k8sClient.Create(ctx, r.desiredBackend(isvc, routeProfile(name+"-prof"), 8001))).To(Succeed())
+		Expect(k8sClient.Create(ctx, r.desiredAIServiceBackend(isvc))).To(Succeed())
+		Expect(k8sClient.Create(ctx, r.desiredAIGatewayRoute(isvc, testEngineModel))).To(Succeed())
 
-		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), "")
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(check.Reason).To(Equal("NotPublished"))
-		got := &gatewayv1.HTTPRoute{}
-		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, got))).To(BeTrue())
+		Expect(check.Reason).To(Equal(RouteNotPublished))
+
+		backend := &egv1alpha1.Backend{}
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-endpoint", Namespace: testNamespace}, backend))).To(BeTrue())
+		sb := &aigwv1beta1.AIServiceBackend{}
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-backend", Namespace: testNamespace}, sb))).To(BeTrue())
+		route := &aigwv1beta1.AIGatewayRoute{}
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route))).To(BeTrue())
 	})
 
-	It("creates an HTTPRoute for a published service with a ready endpoint", func() {
+	It("creates the three catalog objects for a published service with a ready endpoint", func() {
 		name := "route-on"
 		Expect(k8sClient.Create(ctx, routeISVC(name, true))).To(Succeed())
 		r := routeReconciler()
-		hostname := publicHostname(routeISVC(name, true), testGatewayDomain)
-		Expect(hostname).To(Equal(testRouteHostname))
-		// Created but not yet accepted by the gateway: RouteReady must wait.
-		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), hostname)
+		// Persisted but not yet accepted by the Agent Router controller:
+		// RouteReady must wait.
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(check.Reason).To(Equal("GatewayNotAccepted"))
+		Expect(check.Reason).To(Equal(RouteGatewayNotAccepted))
 
-		// The gateway accepts the route; the next check reports it ready.
+		backend := &egv1alpha1.Backend{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-endpoint", Namespace: testNamespace}, backend)).To(Succeed())
+		Expect(backend.Spec.Endpoints).To(Equal([]egv1alpha1.BackendEndpoint{{
+			FQDN: &egv1alpha1.FQDNEndpoint{Hostname: name + "-router.default.svc.cluster.local", Port: 8001},
+		}}))
+		sb := &aigwv1beta1.AIServiceBackend{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-backend", Namespace: testNamespace}, sb)).To(Succeed())
+		Expect(string(sb.Spec.BackendRef.Name)).To(Equal(name + "-endpoint"))
+		route := &aigwv1beta1.AIGatewayRoute{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route)).To(Succeed())
+		Expect(route.Spec.Hostnames).To(Equal([]gatewayv1.Hostname{gatewayv1.Hostname(testCatalogHostname)}))
+		Expect(route.Spec.Rules[0].Matches[0].Headers[0].Value).To(Equal("flash"))
+		Expect(route.Spec.Rules[0].BackendRefs[0].ModelNameOverride).To(Equal(testEngineModel))
+
+		// The Agent Router accepts both objects; the next check reports the
+		// catalog entry ready.
 		acceptRoute(name)
-		check, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), hostname)
+		check, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(check.Reason).To(BeEmpty())
 
-		route := &gatewayv1.HTTPRoute{}
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route)).To(Succeed())
-		Expect(route.Spec.Hostnames).To(Equal([]gatewayv1.Hostname{gatewayv1.Hostname(testRouteHostname)}))
-		Expect(route.Spec.ParentRefs[0].Name).To(Equal(gatewayv1.ObjectName(testGatewayName)))
-		Expect(route.Spec.Rules[0].BackendRefs[0].Name).To(Equal(gatewayv1.ObjectName(name + "-router")))
-		Expect(route.Spec.Rules[0].Timeouts.Request).NotTo(BeNil())
-		// The uniqueness check scans all HTTPRoutes cluster-wide, so the
-		// route must not leak into the later specs.
+		// The model-name uniqueness check scans every AIGatewayRoute in the
+		// cluster, so this catalog entry must not leak into the later specs.
 		Expect(k8sClient.Delete(ctx, route)).To(Succeed())
 	})
 
-	It("reports ModelNameConflict when another route owns the hostname", func() {
+	It("reports ModelNameConflict when another route claims the model name", func() {
 		name := "route-conflict"
 		Expect(k8sClient.Create(ctx, routeISVC(name, true))).To(Succeed())
 		other := routeISVC("route-other", true)
 		Expect(k8sClient.Create(ctx, other)).To(Succeed())
 		r := routeReconciler()
-		// another service's route already owns flash.example.com
-		existing := r.desiredHTTPRoute(other, routeProfile("route-other-prof"), 8001)
+		// Another service's catalog entry already claims the model name.
+		existing := r.desiredAIGatewayRoute(other, testEngineModel)
 		Expect(k8sClient.Create(ctx, existing)).To(Succeed())
 		defer func() { _ = k8sClient.Delete(ctx, existing) }()
 
-		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testRouteHostname)
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(check.Reason).To(Equal("ModelNameConflict"))
-		got := &gatewayv1.HTTPRoute{}
-		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, got))).To(BeTrue())
+		Expect(check.Reason).To(Equal(RouteModelNameConflict))
+		// The conflicting service publishes nothing of its own.
+		route := &aigwv1beta1.AIGatewayRoute{}
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route))).To(BeTrue())
+	})
+
+	It("reports AgentRouterUnavailable when the cluster serves no Agent Router CRDs", func() {
+		// The isvc is never persisted: the degrade check runs before any
+		// cluster write.
+		r := routeReconciler()
+		r.AgentRouterAvailable = false
+		check, err := r.checkRoute(ctx, routeISVC("isvc-degraded", true), routeProfile("p"), readyEndpoint("isvc-degraded"), testEngineModel)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(check.Reason).To(Equal(RouteAgentRouterUnavailable))
 	})
 
 	It("reports EndpointNotReady without a ready endpoint", func() {
 		name := "route-noep"
 		Expect(k8sClient.Create(ctx, routeISVC(name, true))).To(Succeed())
 		r := routeReconciler()
-		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), &endpointCheck{Reason: "EndpointNotReady"}, "")
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), &endpointCheck{Reason: "EndpointNotReady"}, testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(check.Reason).To(Equal("EndpointNotReady"))
+		Expect(check.Reason).To(Equal(EndpointNotReady))
+
+		check, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), nil, testEngineModel)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(check.Reason).To(Equal(EndpointNotReady))
+
+		// Nothing is published without a reachable endpoint.
+		route := &aigwv1beta1.AIGatewayRoute{}
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route))).To(BeTrue())
 	})
 
-	It("keeps an existing route when the endpoint goes unready", func() {
+	It("keeps the catalog objects when the endpoint goes unready", func() {
 		name := "route-keep"
 		Expect(k8sClient.Create(ctx, routeISVC(name, true))).To(Succeed())
 		r := routeReconciler()
-		hostname := publicHostname(routeISVC(name, true), testGatewayDomain)
-		_, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), hostname)
+		_, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
-		// Endpoint goes unready: the route must survive (design: route
-		// lifecycle follows the Service; gateway health checks drain).
-		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), &endpointCheck{Reason: "EndpointNotReady"}, "")
+		// The endpoint goes unready: the catalog entry must survive (design:
+		// route lifecycle follows the Service; gateway health checks drain).
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), &endpointCheck{Reason: "EndpointNotReady"}, testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(check.Reason).To(Equal("EndpointNotReady"))
-		route := &gatewayv1.HTTPRoute{}
+		Expect(check.Reason).To(Equal(EndpointNotReady))
+		route := &aigwv1beta1.AIGatewayRoute{}
 		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, route)).To(Succeed())
 	})
 
-	It("updates the HTTPRoute when the published timeout changes", func() {
-		// The model name must be unique in the cluster: the route-keep spec
-		// leaves its flash.example.com route behind.
+	It("reports GatewayNotAccepted until both AI objects are accepted", func() {
+		name := "route-accept"
+		Expect(k8sClient.Create(ctx, routeISVC(name, true))).To(Succeed())
+		r := routeReconciler()
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(check.Reason).To(Equal(RouteGatewayNotAccepted))
+
+		// Only the entry is accepted: the backend is still pending.
+		acceptAIGatewayRoute(name)
+		check, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(check.Reason).To(Equal(RouteGatewayNotAccepted))
+
+		// Both accepted: the catalog entry is live.
+		acceptAIServiceBackend(name)
+		check, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(check.Reason).To(BeEmpty())
+
+		route := &aigwv1beta1.AIGatewayRoute{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, route)).To(Succeed())
+	})
+
+	It("updates the AIGatewayRoute when the declared timeout changes", func() {
+		// The model name must be unique in the cluster: the specs above leave
+		// catalog entries behind.
 		name := "route-update"
 		isvc := isvcForApply(name)
 		isvc.Spec.Route = &aiv1alpha1.RouteSpec{Publish: true, ModelName: "update-model", TimeoutSeconds: ptrTo[int64](60)}
 		Expect(k8sClient.Create(ctx, isvc)).To(Succeed())
 		r := routeReconciler()
-		hostname := publicHostname(isvc, testGatewayDomain)
-		Expect(hostname).To(Equal("update-model.example.com"))
-		_, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), hostname)
+		_, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
-		acceptRoute(name) // the gateway accepts; RouteReady reports "" below
-		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), hostname)
+		acceptRoute(name) // the Agent Router accepts; RouteReady reports "" below
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(check.Reason).To(BeEmpty())
 
-		route := &gatewayv1.HTTPRoute{}
+		route := &aigwv1beta1.AIGatewayRoute{}
 		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route)).To(Succeed())
 		Expect(string(*route.Spec.Rules[0].Timeouts.Request)).To(Equal("60s"))
 		oldRV := route.ResourceVersion
 
 		// The in-cluster spec changes the timeout; the next check must update
-		// the stored route instead of leaving it stale.
+		// the stored entry instead of leaving it stale.
 		current := mustGetISVC(ctx, name)
 		*current.Spec.Route.TimeoutSeconds = 30
 		Expect(k8sClient.Update(ctx, current)).To(Succeed())
 
 		// The update bumps the route generation; the acceptance check requires
 		// fresh status (ObservedGeneration == the new generation), so the
-		// gateway re-accepts before RouteReady returns.
-		check, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), hostname)
+		// Agent Router re-accepts before RouteReady returns.
+		check, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(check.Reason).To(Equal("GatewayNotAccepted"))
+		Expect(check.Reason).To(Equal(RouteGatewayNotAccepted))
 		acceptRoute(name)
-		check, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), hostname)
+		check, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(check.Reason).To(BeEmpty())
 		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route)).To(Succeed())
@@ -213,54 +320,197 @@ var _ = Describe("checkRoute", func() {
 		Expect(route.ResourceVersion).NotTo(Equal(oldRV))
 	})
 
-	It("sees no drift in the route a real API server stored", func() {
-		// Pins the default set routeSpecWithDefaults mirrors against what an
-		// actual API server writes: a default this list is missing makes the
-		// reconciler rewrite the route on every pass, which is the 409 race
-		// described in the routeNeedsUpdate spec.
+	It("sees no drift in the objects a real API server stored", func() {
+		// Pins the default set the *NeedsUpdate comparisons mirror against what
+		// an actual API server writes: a default this list is missing makes
+		// checkRoute rewrite the object on every pass — a write that runs the
+		// optimistic-concurrency check against the Agent Router controller's
+		// status writes and re-enqueues the service through the Owns() watch.
 		name := "route-stored"
 		isvc := isvcForApply(name)
 		isvc.Spec.Route = &aiv1alpha1.RouteSpec{Publish: true, ModelName: "stored-model", TimeoutSeconds: ptrTo[int64](60)}
 		Expect(k8sClient.Create(ctx, isvc)).To(Succeed())
 		r := routeReconciler()
-		hostname := publicHostname(isvc, testGatewayDomain)
-		_, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), hostname)
+		_, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
 
-		stored := &gatewayv1.HTTPRoute{}
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, stored)).To(Succeed())
-		desired := r.desiredHTTPRoute(mustGetISVC(ctx, name), routeProfile(name+"-prof"), 8001)
-		Expect(routeNeedsUpdate(stored, desired)).To(BeFalse())
+		stored := func(obj client.Object, name string) {
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: testNamespace}, obj)).To(Succeed())
+		}
+		backend := &egv1alpha1.Backend{}
+		stored(backend, name+"-endpoint")
+		sb := &aigwv1beta1.AIServiceBackend{}
+		stored(sb, name+"-backend")
+		route := &aigwv1beta1.AIGatewayRoute{}
+		stored(route, name+"-route")
+
+		// A second pass over the objects the API server stored must touch none
+		// of them.
+		_, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
+		Expect(err).NotTo(HaveOccurred())
+		after := &egv1alpha1.Backend{}
+		stored(after, name+"-endpoint")
+		Expect(after.ResourceVersion).To(Equal(backend.ResourceVersion))
+		afterSB := &aigwv1beta1.AIServiceBackend{}
+		stored(afterSB, name+"-backend")
+		Expect(afterSB.ResourceVersion).To(Equal(sb.ResourceVersion))
+		afterRoute := &aigwv1beta1.AIGatewayRoute{}
+		stored(afterRoute, name+"-route")
+		Expect(afterRoute.ResourceVersion).To(Equal(route.ResourceVersion))
+
+		// Those comparisons are what decides whether that write is sent at
+		// all: an object the API server stored must not read as drift, or every
+		// pass writes — an update that runs the optimistic-concurrency check
+		// against the Agent Router controller's status writes.
+		current := mustGetISVC(ctx, name)
+		Expect(aiGatewayRouteNeedsUpdate(afterRoute, r.desiredAIGatewayRoute(current, testEngineModel))).To(BeFalse())
+		Expect(backendNeedsUpdate(after, r.desiredBackend(current, routeProfile(name+"-prof"), 8001))).To(BeFalse())
+		Expect(aiServiceBackendNeedsUpdate(afterSB, r.desiredAIServiceBackend(current))).To(BeFalse())
+
+		// A genuine change is still drift: the tolerance above must not degrade
+		// into "never update", or the catalog objects would keep serving the
+		// old endpoint or schema after the spec changed.
+		Expect(backendNeedsUpdate(after, r.desiredBackend(current, routeProfile(name+"-prof"), 8002))).To(BeTrue())
+		otherSchema := r.desiredAIServiceBackend(current)
+		otherSchema.Spec.APISchema.Name = aigwv1beta1.APISchemaAWSBedrock
+		Expect(aiServiceBackendNeedsUpdate(afterSB, otherSchema)).To(BeTrue())
 	})
 
 	It("does not report acceptance from a stale status after a spec update", func() {
-		// The route is accepted for generation 1; a spec change bumps the
-		// generation, and the pre-update status must not report RouteReady
-		// until the gateway writes status for the new generation.
+		// The catalog objects are accepted for generation 1; a spec change
+		// bumps the AIGatewayRoute's generation, and the pre-update status must
+		// not report RouteReady until the Agent Router writes status for the
+		// new generation.
 		name := "route-stale"
 		isvc := isvcForApply(name)
 		isvc.Spec.Route = &aiv1alpha1.RouteSpec{Publish: true, ModelName: "stale-model", TimeoutSeconds: ptrTo[int64](60)}
 		Expect(k8sClient.Create(ctx, isvc)).To(Succeed())
 		r := routeReconciler()
-		hostname := publicHostname(isvc, testGatewayDomain)
-		_, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), hostname)
+		_, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
 		acceptRoute(name) // accepted for generation 1
 
-		// The spec changes the timeout; the update bumps the route generation
-		// but the stored status still carries generation 1.
+		// The spec changes the timeout; the update bumps the AIGatewayRoute
+		// generation but the stored status still carries generation 1.
 		current := mustGetISVC(ctx, name)
 		*current.Spec.Route.TimeoutSeconds = 30
 		Expect(k8sClient.Update(ctx, current)).To(Succeed())
-		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), hostname)
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(check.Reason).To(Equal("GatewayNotAccepted"))
+		Expect(check.Reason).To(Equal(RouteGatewayNotAccepted))
 
-		// The gateway writes status for the new generation; RouteReady returns.
+		// The Agent Router writes status for the new generation; RouteReady
+		// returns.
 		acceptRoute(name)
-		check, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), hostname)
+		check, err = r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(check.Reason).To(BeEmpty())
+	})
+
+	It("deletes a legacy per-model HTTPRoute owned by the service", func() {
+		// The retired publish primitive left <isvc>-route HTTPRoutes behind; one
+		// still around would keep serving the old hostname with the old timeout
+		// semantics. Turning publishing off must remove it too.
+		name := "route-legacy"
+		Expect(k8sClient.Create(ctx, routeISVC(name, false))).To(Succeed())
+		r := routeReconciler()
+		isvc := mustGetISVC(ctx, name)
+		legacy := &gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: name + "-route", Namespace: testNamespace}}
+		Expect(ctrl.SetControllerReference(isvc, legacy, testScheme)).To(Succeed())
+		Expect(k8sClient.Create(ctx, legacy)).To(Succeed())
+
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(check.Reason).To(Equal(RouteNotPublished))
+
+		got := &gatewayv1.HTTPRoute{}
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, got))).To(BeTrue())
+	})
+
+	It("deletes a legacy per-model HTTPRoute while the service is publishing", func() {
+		// The cleanup runs on every pass, outside the publish branch: a legacy
+		// HTTPRoute left behind would keep serving the old hostname with the old
+		// timeout semantics even though the service now publishes through the
+		// catalog — and it shares the <isvc>-route name with the catalog entry,
+		// so only the kind tells the two apart.
+		name := "route-legacy-pub"
+		isvc := routeISVC(name, true)
+		// Unique in the cluster: the catalog entry claims this model name.
+		isvc.Spec.Route.ModelName = "legacy-pub-model"
+		Expect(k8sClient.Create(ctx, isvc)).To(Succeed())
+		r := routeReconciler()
+		legacy := &gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: name + "-route", Namespace: testNamespace}}
+		Expect(ctrl.SetControllerReference(mustGetISVC(ctx, name), legacy, testScheme)).To(Succeed())
+		Expect(k8sClient.Create(ctx, legacy)).To(Succeed())
+
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
+		Expect(err).NotTo(HaveOccurred())
+		// The pass took the publish path: the catalog entry exists and waits for
+		// the Agent Router's acceptance.
+		Expect(check.Reason).To(Equal(RouteGatewayNotAccepted))
+		route := &aigwv1beta1.AIGatewayRoute{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route)).To(Succeed())
+
+		// ...and the legacy HTTPRoute of the same name is removed nevertheless.
+		got := &gatewayv1.HTTPRoute{}
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, got))).To(BeTrue())
+	})
+
+	It("leaves the HTTPRoute the Agent Router derives from the catalog entry alone", func() {
+		// The Agent Router's controller materialises an HTTPRoute named after the
+		// AIGatewayRoute, in that route's namespace, controlled by it and carrying
+		// its ai-gateway-generated annotation — the very <isvc>-route name this
+		// cleanup looks at. That generated route is not the service's object:
+		// deleting it would remove a live catalog route, and failing on it (as a
+		// strict ownership check does) would wedge every reconcile of every
+		// published service on a cluster that runs the Agent Router, publish=false
+		// included.
+		name := "route-generated"
+		isvc := routeISVC(name, true)
+		// Unique in the cluster: the catalog entry claims this model name.
+		isvc.Spec.Route.ModelName = "generated-model"
+		Expect(k8sClient.Create(ctx, isvc)).To(Succeed())
+		r := routeReconciler()
+		entry := r.desiredAIGatewayRoute(mustGetISVC(ctx, name), testEngineModel)
+		Expect(k8sClient.Create(ctx, entry)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, entry) }()
+
+		generated := &gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: name + "-route", Namespace: testNamespace}}
+		Expect(ctrl.SetControllerReference(entry, generated, testScheme)).To(Succeed())
+		Expect(k8sClient.Create(ctx, generated)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, generated) }()
+
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(check.Reason).To(Equal(RouteGatewayNotAccepted))
+
+		// ...and the generated route survived the pass, still the Agent Router's
+		// object rather than this service's.
+		got := &gatewayv1.HTTPRoute{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, got)).To(Succeed())
+		Expect(metav1.IsControlledBy(got, entry)).To(BeTrue())
+	})
+
+	It("reports GatewayNotAccepted when the catalog objects are not yet observed", func() {
+		// The re-read after the apply goes through the client's cache: right after
+		// the create the objects are persisted but the cache may not have observed
+		// them yet, so a Get misses. That is a catalog entry waiting for the Agent
+		// Router, not a failed pass.
+		name := "route-unobserved"
+		isvc := routeISVC(name, true)
+		// Unique in the cluster: the catalog entry claims this model name.
+		isvc.Spec.Route.ModelName = "unobserved-model"
+		Expect(k8sClient.Create(ctx, isvc)).To(Succeed())
+		r := routeReconciler()
+		r.Client = &notYetObservedClient{Client: k8sClient, created: map[client.ObjectKey]bool{}}
+
+		check, err := r.checkRoute(ctx, mustGetISVC(ctx, name), routeProfile(name+"-prof"), readyEndpoint(name), testEngineModel)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(check.Reason).To(Equal(RouteGatewayNotAccepted))
+
+		route := &aigwv1beta1.AIGatewayRoute{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name + "-route", Namespace: testNamespace}, route)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, route)).To(Succeed())
 	})
 
 	It("sets the RouteReady condition from the check", func() {
@@ -272,52 +522,84 @@ var _ = Describe("checkRoute", func() {
 	})
 })
 
-var _ = Describe("routeNeedsUpdate", func() {
-	// storedRoute is the route as the API server persists it: the controller's
-	// desired object plus the Gateway API defaults (see the CRDs under
-	// testdata/gateway-crds).
-	storedRoute := func(desired *gatewayv1.HTTPRoute) *gatewayv1.HTTPRoute {
-		stored := desired.DeepCopy()
-		stored.Spec.ParentRefs[0].Group = ptrTo(gatewayv1.Group(gatewayAPIGroup))
-		stored.Spec.ParentRefs[0].Kind = ptrTo(gatewayv1.Kind(gatewayKind))
-		backend := &stored.Spec.Rules[0].BackendRefs[0].BackendRef
-		backend.Group = ptrTo(gatewayv1.Group(""))
-		backend.Kind = ptrTo(gatewayv1.Kind(serviceKind))
-		backend.Weight = ptrTo(int32(1))
-		stored.Spec.Rules[0].Matches = []gatewayv1.HTTPRouteMatch{{
-			Path: &gatewayv1.HTTPPathMatch{Type: ptrTo(gatewayv1.PathMatchPathPrefix), Value: ptrTo("/")},
-		}}
-		return stored
+var _ = Describe("desired catalog objects", func() {
+	profile := func() *aiv1alpha1.InferenceRuntimeProfile {
+		p := routeProfile("catalog-profile")
+		p.Spec.Endpoint.Role = "vllm"
+		return p
 	}
-	driftRoute := func() *gatewayv1.HTTPRoute {
-		return routeReconciler().desiredHTTPRoute(routeISVC("route-drift", true), routeProfile("route-drift-prof"), 8001)
+	// expectCatalogLabels pins the label map of every catalog object literally —
+	// the three keys with the values the fixture's isvc carries — rather than
+	// through routeLabels, which would restate the code under test.
+	expectCatalogLabels := func(labels map[string]string) {
+		Expect(labels).To(HaveLen(3))
+		Expect(labels).To(HaveKeyWithValue("ai.cubestack.io/inference-service", "catalog-isvc"))
+		Expect(labels).To(HaveKeyWithValue("ai.cubestack.io/profile", "prof"))
+		Expect(labels).To(HaveKeyWithValue("ai.cubestack.io/managed-by", "inference-Controller"))
 	}
 
-	It("does not treat the API server's defaults as drift", func() {
-		// Those defaults are server-owned. A comparison that counts them as
-		// drift makes checkRoute issue an update on every reconcile, and that
-		// write runs the optimistic-concurrency check against the gateway
-		// controller's status writes: the reconcile then fails with
-		// "the object has been modified" (409) although nothing had drifted.
-		Expect(routeNeedsUpdate(storedRoute(driftRoute()), driftRoute())).To(BeFalse())
+	It("renders the Backend pointing at the endpoint Service FQDN", func() {
+		isvc := routeISVC("catalog-isvc", true)
+		backend := routeReconciler().desiredBackend(isvc, profile(), 8000)
+
+		Expect(backend.Name).To(Equal("catalog-isvc-endpoint"))
+		Expect(backend.Namespace).To(Equal(testNamespace))
+		expectCatalogLabels(backend.Labels)
+		Expect(backend.Spec.Type).To(HaveValue(Equal(egv1alpha1.BackendTypeEndpoints)))
+		Expect(backend.Spec.Endpoints).To(Equal([]egv1alpha1.BackendEndpoint{{
+			FQDN: &egv1alpha1.FQDNEndpoint{Hostname: "catalog-isvc-vllm.default.svc.cluster.local", Port: 8000},
+		}}))
+		Expect(metav1.IsControlledBy(backend, isvc)).To(BeTrue())
 	})
 
-	It("still reports drift the controller owns", func() {
-		// The guard against "fixing" the above by never reporting drift: a
-		// changed timeout, hostname or backend port is ours and must update.
-		desired := driftRoute()
+	It("renders the AIServiceBackend with the OpenAI schema and the Backend ref", func() {
+		isvc := routeISVC("catalog-isvc", true)
+		sb := routeReconciler().desiredAIServiceBackend(isvc)
 
-		staleTimeout := storedRoute(desired)
-		staleTimeout.Spec.Rules[0].Timeouts.Request = ptrTo(gatewayv1.Duration("30s"))
-		Expect(routeNeedsUpdate(staleTimeout, desired)).To(BeTrue())
+		Expect(sb.Name).To(Equal("catalog-isvc-backend"))
+		expectCatalogLabels(sb.Labels)
+		Expect(sb.Spec.APISchema.Name).To(Equal(aigwv1beta1.APISchemaOpenAI))
+		Expect(sb.Spec.BackendRef.Group).To(HaveValue(Equal(gatewayv1.Group(envoyGatewayAPIGroup))))
+		Expect(sb.Spec.BackendRef.Kind).To(HaveValue(Equal(gatewayv1.Kind(egBackendKind))))
+		Expect(string(sb.Spec.BackendRef.Name)).To(Equal("catalog-isvc-endpoint"))
+		Expect(metav1.IsControlledBy(sb, isvc)).To(BeTrue())
+	})
 
-		staleHostname := storedRoute(desired)
-		staleHostname.Spec.Hostnames = []gatewayv1.Hostname{"other.example.com"}
-		Expect(routeNeedsUpdate(staleHostname, desired)).To(BeTrue())
+	It("renders the AIGatewayRoute as a catalog entry of the shared hostname", func() {
+		isvc := routeISVC("catalog-isvc", true)
+		route := routeReconciler().desiredAIGatewayRoute(isvc, "qwen38-27b")
 
-		stalePort := storedRoute(desired)
-		stalePort.Spec.Rules[0].BackendRefs[0].Port = ptrTo(gatewayv1.PortNumber(9999))
-		Expect(routeNeedsUpdate(stalePort, desired)).To(BeTrue())
+		Expect(route.Name).To(Equal("catalog-isvc-route"))
+		expectCatalogLabels(route.Labels)
+		Expect(route.Spec.Hostnames).To(Equal([]gatewayv1.Hostname{gatewayv1.Hostname(testCatalogHostname)}))
+		Expect(route.Spec.ParentRefs).To(HaveLen(1))
+		Expect(string(route.Spec.ParentRefs[0].Name)).To(Equal(testGatewayName))
+		Expect(route.Spec.ParentRefs[0].Namespace).To(HaveValue(Equal(gatewayv1.Namespace(testGatewayNamespace))))
+
+		rule := route.Spec.Rules[0]
+		Expect(rule.Matches[0].Headers).To(Equal([]gatewayv1.HTTPHeaderMatch{{
+			Type:  ptrTo(gatewayv1.HeaderMatchExact),
+			Name:  gatewayv1.HTTPHeaderName(aiModelHeaderName),
+			Value: "flash", // the route.modelName routeISVC declares
+		}}))
+		Expect(rule.BackendRefs[0].Name).To(Equal("catalog-isvc-backend"))
+		Expect(rule.BackendRefs[0].ModelNameOverride).To(Equal("qwen38-27b"))
+		Expect(rule.BackendRefs[0].Weight).To(HaveValue(Equal(int32(1))))
+		Expect(rule.BackendRefs[0].Priority).To(HaveValue(Equal(uint32(0))))
+		Expect(rule.Timeouts.Request).To(HaveValue(Equal(gatewayv1.Duration("60s"))))
+		Expect(rule.StreamIdleTimeout).To(HaveValue(Equal(gatewayv1.Duration("300s"))))
+		Expect(rule.ModelsOwnedBy).To(HaveValue(Equal(catalogOwnedBy)))
+		Expect(metav1.IsControlledBy(route, isvc)).To(BeTrue())
+	})
+
+	It("honours the declared timeouts", func() {
+		isvc := routeISVC("catalog-isvc", true)
+		isvc.Spec.Route.TimeoutSeconds = ptrTo(int64(3600))
+		isvc.Spec.Route.IdleTimeoutSeconds = ptrTo(int64(120))
+		rule := routeReconciler().desiredAIGatewayRoute(isvc, "m").Spec.Rules[0]
+
+		Expect(rule.Timeouts.Request).To(HaveValue(Equal(gatewayv1.Duration("3600s"))))
+		Expect(rule.StreamIdleTimeout).To(HaveValue(Equal(gatewayv1.Duration("120s"))))
 	})
 })
 

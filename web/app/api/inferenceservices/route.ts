@@ -37,6 +37,7 @@ export interface InferenceServiceSummary {
   published: boolean;
   routeModelName: string | null;
   timeoutSeconds: number | null;
+  idleTimeoutSeconds: number | null;
   createdAt: string | null;
   // resolved profile facts
   engine: string | null;
@@ -103,6 +104,7 @@ interface IsvcSpec {
     publish?: boolean;
     modelName?: string;
     timeoutSeconds?: number;
+    idleTimeoutSeconds?: number;
   };
 }
 interface IsvcStatus {
@@ -248,6 +250,7 @@ function project(
     published: spec.route?.publish ?? false,
     routeModelName: spec.route?.modelName ?? null,
     timeoutSeconds: spec.route?.timeoutSeconds ?? null,
+    idleTimeoutSeconds: spec.route?.idleTimeoutSeconds ?? null,
     createdAt: isvc.metadata?.creationTimestamp ?? null,
     engine: profile?.spec?.engine?.name ?? null,
     engineVersion: profile?.spec?.engine?.version ?? null,
@@ -411,13 +414,23 @@ export const PATCH = withAuth(async (req) => {
 
 const DNS_LABEL_RE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
 
+// route.modelName is the platform-wide catalog model name (operator CRD
+// pattern), not a hostname label: the shared catalog hostname carries every
+// published model, selected by the request body's `model` field.
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,127}$/;
+
 interface CreateBody {
   namespace?: string;
   name?: string;
   profileRef?: string;
   modelRef?: string;
   overrides?: Record<string, number | string | boolean>;
-  route?: { publish?: boolean; modelName?: string; timeoutSeconds?: number };
+  route?: {
+    publish?: boolean;
+    modelName?: string;
+    timeoutSeconds?: number;
+    idleTimeoutSeconds?: number;
+  };
 }
 interface ModelVersionRef {
   metadata?: { name?: string };
@@ -485,18 +498,29 @@ export const POST = withAuth(async (req) => {
     const oerr = overrideError(body.overrides ?? {}, profile);
     if (oerr) return ValidationError(oerr);
 
-    // Route: publishing requires a valid single DNS-label modelName.
+    // Route: publishing joins the platform model catalog, which requires a
+    // valid catalog model name. Both timeouts are bounded by the operator's CRD
+    // ranges; timeoutSeconds 0 means "no total-duration cap".
     const timeout = body.route?.timeoutSeconds;
-    if (timeout !== undefined && timeout !== null && (Number.isNaN(timeout) || timeout < 1 || timeout > 86400)) {
-      return ValidationError("timeoutSeconds 需在 1–86400 之间。");
+    const idle = body.route?.idleTimeoutSeconds;
+    if (timeout !== undefined && timeout !== null && (Number.isNaN(timeout) || timeout < 0 || timeout > 86400)) {
+      return ValidationError("timeoutSeconds 需在 0–86400 之间(0 = 不设上限)。");
     }
-    let route: { publish: boolean; modelName?: string; timeoutSeconds?: number };
+    if (idle !== undefined && idle !== null && (Number.isNaN(idle) || idle < 1 || idle > 86400)) {
+      return ValidationError("idleTimeoutSeconds 需在 1–86400 之间。");
+    }
+    let route: {
+      publish: boolean;
+      modelName?: string;
+      timeoutSeconds?: number;
+      idleTimeoutSeconds?: number;
+    };
     if (body.route?.publish) {
       const modelName = body.route?.modelName;
-      if (!modelName || !DNS_LABEL_RE.test(modelName)) {
-        return ValidationError("route.modelName 不合法:需单个 DNS label。");
+      if (!modelName || !MODEL_NAME_RE.test(modelName)) {
+        return ValidationError("route.modelName 不合法:需以字母数字开头,允许 . _ / - ,长度 ≤128。");
       }
-      route = { publish: true, modelName, timeoutSeconds: timeout ?? 60 };
+      route = { publish: true, modelName, timeoutSeconds: timeout ?? 0, idleTimeoutSeconds: idle ?? 300 };
     } else {
       route = { publish: false };
     }

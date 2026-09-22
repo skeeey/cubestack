@@ -2,12 +2,12 @@ image:
   repository: harbor.isuanova.com/suanova/cubestack-controller-manager
   tag: latest
 
-# Platform Gateway the operator publishes InferenceService routes to
+# Platform Gateway the operator publishes InferenceService catalog entries to
 # (spec.route.publish: true), and that DevEnvironment ListenerSets attach to.
 # The chart creates that Gateway in the release namespace and tells the manager
 # that same namespace, so the release can be installed anywhere. Set
-# gateway.domain to enable publishing:
-#   helm install ... --set gateway.domain=example.com
+# gateway.catalogHostname to enable publishing:
+#   helm install ... --set gateway.catalogHostname=ai.example.com
 #
 # The chart creates only the Gateway, not its dataplane: how the proxy is
 # exposed (Service type) and which proxy image runs are properties of the
@@ -24,7 +24,11 @@ gateway:
   # controller has established (`eg` is the one Envoy Gateway installs) and
   # that carries an EnvoyProxy configured for this cluster.
   className: eg
-  domain: ""                    # --gateway-domain
+  # Shared model-catalog hostname published InferenceServices attach to: every
+  # published service is one model of this one catalog entry, selected by the
+  # model name in the request. Empty = flag omitted, which leaves publishing
+  # off (RouteReady=False, GatewayNotConfigured).
+  catalogHostname: ""           # --gateway-catalog-hostname
   # Namespace the Gateway's dataplane (proxy) pods run in — not the namespace
   # of the Gateway object itself. Read by the DevEnvironment controller: it is
   # where each environment's NetworkPolicy admits ingress from, so a route

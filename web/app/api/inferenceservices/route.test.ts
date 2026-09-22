@@ -53,7 +53,7 @@ function stubCluster() {
               modelRef: "deepseek-v4-flash-w8a8-v1",
               profileRef: "metax-sglang-dsv4-pd",
               overrides: { decodeReplicas: 2, prefillReplicas: 1, maxModelLen: 131072 },
-              route: { modelName: "dsv4-flash", publish: true, timeoutSeconds: 60 },
+              route: { modelName: "dsv4-flash", publish: true, timeoutSeconds: 0, idleTimeoutSeconds: 300 },
             },
             // No status: the controller has not reconciled yet.
           },
@@ -67,7 +67,7 @@ function stubCluster() {
               modelRef: "deepseek-v4-pro-w8a8-v1",
               profileRef: "metax-sglang-dsv4-pd",
               overrides: { decodeReplicas: 2, prefillReplicas: 1, maxModelLen: 131072 },
-              route: { modelName: "dsv4-pro", publish: true, timeoutSeconds: 60 },
+              route: { modelName: "dsv4-pro", publish: true, timeoutSeconds: 0, idleTimeoutSeconds: 300 },
             },
           },
         ],
@@ -157,7 +157,8 @@ describe("inference services route", () => {
       modelRef: "deepseek-v4-flash-w8a8-v1",
       published: true,
       routeModelName: "dsv4-flash",
-      timeoutSeconds: 60,
+      timeoutSeconds: 0,
+      idleTimeoutSeconds: 300,
       // resolved profile facts
       engine: "sglang",
       engineVersion: "vendor-0.5.12-rc1",
@@ -493,7 +494,7 @@ describe("inference services create (POST)", () => {
     expect(createNamespacedCustomObject).not.toHaveBeenCalled();
   });
 
-  it("rejects a publish route without a valid modelName", async () => {
+  it("creates a published service with a catalog model name and the timeout defaults", async () => {
     const { POST } = await importRoute();
     const res = await POST(
       await buildPost({
@@ -501,12 +502,86 @@ describe("inference services create (POST)", () => {
         name: "ok-name",
         profileRef: "metax-sglang-dsv4-pd",
         modelRef: "deepseek-v4-flash-w8a8-v1",
-        route: { publish: true, modelName: "" },
+        // A catalog model name is not a hostname segment: mixed case and "/"
+        // are legal, while DNS_LABEL_RE would reject both.
+        route: { publish: true, modelName: "Qwen3.8-27B/instruct" },
       }),
       undefined,
     );
-    expect(res.status).toBe(400);
-    expect(createNamespacedCustomObject).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(createNamespacedCustomObject).toHaveBeenCalledTimes(1);
+    expect(createNamespacedCustomObject.mock.calls[0][0].body).toMatchObject({
+      spec: {
+        route: {
+          publish: true,
+          modelName: "Qwen3.8-27B/instruct",
+          timeoutSeconds: 0, // 0 = no total-duration cap (the operator default)
+          idleTimeoutSeconds: 300, // no-progress cap
+        },
+      },
+    });
+  });
+
+  it("keeps the route timeouts the client sent", async () => {
+    const { POST } = await importRoute();
+    const res = await POST(
+      await buildPost({
+        namespace: "project-a",
+        name: "ok-name",
+        profileRef: "metax-sglang-dsv4-pd",
+        modelRef: "deepseek-v4-flash-w8a8-v1",
+        route: { publish: true, modelName: "dsv4-flash", timeoutSeconds: 3600, idleTimeoutSeconds: 60 },
+      }),
+      undefined,
+    );
+    expect(res.status).toBe(201);
+    expect(createNamespacedCustomObject.mock.calls[0][0].body).toMatchObject({
+      spec: { route: { publish: true, timeoutSeconds: 3600, idleTimeoutSeconds: 60 } },
+    });
+  });
+
+  it("rejects a publish route without a valid modelName", async () => {
+    const { POST } = await importRoute();
+    for (const modelName of ["", ".dsv4", "dsv4 flash", "-dsv4"]) {
+      createNamespacedCustomObject.mockClear();
+      const res = await POST(
+        await buildPost({
+          namespace: "project-a",
+          name: "ok-name",
+          profileRef: "metax-sglang-dsv4-pd",
+          modelRef: "deepseek-v4-flash-w8a8-v1",
+          route: { publish: true, modelName },
+        }),
+        undefined,
+      );
+      expect(res.status, `modelName ${JSON.stringify(modelName)}`).toBe(400);
+      expect(createNamespacedCustomObject).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects route timeouts outside the operator's ranges", async () => {
+    const { POST } = await importRoute();
+    const cases: Array<Record<string, number>> = [
+      { timeoutSeconds: -1 },
+      { timeoutSeconds: 86401 },
+      { idleTimeoutSeconds: 0 },
+      { idleTimeoutSeconds: 86401 },
+    ];
+    for (const timeouts of cases) {
+      createNamespacedCustomObject.mockClear();
+      const res = await POST(
+        await buildPost({
+          namespace: "project-a",
+          name: "ok-name",
+          profileRef: "metax-sglang-dsv4-pd",
+          modelRef: "deepseek-v4-flash-w8a8-v1",
+          route: { publish: true, modelName: "dsv4-flash", ...timeouts },
+        }),
+        undefined,
+      );
+      expect(res.status, JSON.stringify(timeouts)).toBe(400);
+      expect(createNamespacedCustomObject).not.toHaveBeenCalled();
+    }
   });
 
   it("returns 500 when the target create call fails", async () => {

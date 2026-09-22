@@ -31,11 +31,11 @@ spec:
         - --gateway-name={{ . }}
         {{- end }}
         - --gateway-namespace={{ .Release.Namespace }}
-        {{- if .Values.gateway.domain }}
-        - --gateway-domain={{ .Values.gateway.domain }}
-        {{- end }}
         {{- with .Values.gateway.dataplaneNamespace }}
         - --gateway-dataplane-namespace={{ . }}
+        {{- end }}
+        {{- if .Values.gateway.catalogHostname }}
+        - --gateway-catalog-hostname={{ .Values.gateway.catalogHostname }}
         {{- end }}
         - --l4-port-range-start={{ .Values.l4PortRange.start }}
         - --l4-port-range-end={{ .Values.l4PortRange.end }}

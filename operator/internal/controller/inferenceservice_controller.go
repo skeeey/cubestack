@@ -25,6 +25,8 @@ limitations under the License.
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=leaderworkerset.x-k8s.io,resources=leaderworkersets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=aigateway.envoyproxy.io,resources=aigatewayroutes;aiservicebackends,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=backends,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
 package controller
@@ -38,6 +40,8 @@ import (
 	"slices"
 	"strings"
 
+	aigwv1beta1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -47,12 +51,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	leaderworkersetv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 
 	aiv1alpha1 "github.com/suanova/cubestack/api/v1alpha1"
@@ -68,13 +72,16 @@ import (
 type InferenceServiceReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	// GatewayDomain is the platform domain; the public hostname of a published
-	// service is <modelName>.<GatewayDomain> (design §3.3).
-	GatewayDomain string
 	// GatewayName and GatewayNamespace select the platform Gateway the
-	// HTTPRoutes of published services attach to.
+	// catalog entry of a published service attaches to (spec.parentRefs).
 	GatewayName      string
 	GatewayNamespace string
+	// CatalogHostname is the shared model-catalog entry hostname every
+	// published service attaches to (design §3.3).
+	CatalogHostname string
+	// AgentRouterAvailable reports whether the cluster serves the Agent
+	// Router CRDs. Probed once at startup (AgentRouterAvailable below).
+	AgentRouterAvailable bool
 	// ServiceMonitorAvailable reports whether the cluster serves the
 	// monitoring.coreos.com ServiceMonitor CRD. The ServiceMonitors scraping
 	// the role Services are monitoring infrastructure, not part of the
@@ -95,6 +102,28 @@ func ServiceMonitorAvailable(mapper meta.RESTMapper) bool {
 		monitoringv1.SchemeGroupVersion.Version,
 	)
 	return err == nil
+}
+
+// AgentRouterAvailable reports whether the cluster serves the Agent Router
+// kinds the published-route path needs: the ai-gateway CRDs (AIGatewayRoute,
+// AIServiceBackend) and the Envoy Gateway Backend they reference. A cluster
+// without them still reconciles InferenceServices: publish degrades to
+// RouteReady=False with reason AgentRouterUnavailable instead of failing on an
+// unknown kind. All the kinds are probed together because the guarded setup
+// registers an Owns/Watches for each of them — a cluster serving only some of
+// them would otherwise abort controller startup, the very failure the guard
+// exists to prevent. Probed once at startup, like ServiceMonitorAvailable.
+func AgentRouterAvailable(mapper meta.RESTMapper) bool {
+	for _, gvk := range []schema.GroupVersionKind{
+		aigwv1beta1.SchemeGroupVersion.WithKind("AIGatewayRoute"),
+		aigwv1beta1.SchemeGroupVersion.WithKind("AIServiceBackend"),
+		egv1alpha1.SchemeGroupVersion.WithKind("Backend"),
+	} {
+		if _, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // Reconcile runs the render pipeline's generation steps (design §4.1 steps
@@ -253,18 +282,19 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		setEndpointReadyCondition(&desired.Status.Conditions, endpoint)
 		desired.Status.Endpoint = &aiv1alpha1.EndpointStatus{Internal: endpoint.Internal}
 
-		hostname := publicHostname(desired, r.GatewayDomain)
-		route, err := r.checkRoute(ctx, desired, resolved.profile, endpoint, hostname)
+		route, err := r.checkRoute(ctx, desired, resolved.profile, endpoint, resolved.model.Spec.Model)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 		setRouteReadyCondition(&desired.Status.Conditions, route)
 		// status.endpoint.public is the canonical public address of the
-		// published route: the platform's public entry point terminates TLS,
-		// so the scheme is fixed to https regardless of the Gateway listener
-		// protocol. Derived from the route, never from the listener.
-		if hostname != "" && route.Reason == "" {
-			desired.Status.Endpoint.Public = "https://" + hostname
+		// published service: the model catalog's shared entry hostname, at
+		// which the service's model is selected by route.modelName. The
+		// platform's public entry point terminates TLS, so the scheme is fixed
+		// to https regardless of the Gateway listener protocol. Derived from
+		// the route, never from the listener.
+		if route.Reason == "" && r.CatalogHostname != "" {
+			desired.Status.Endpoint.Public = "https://" + r.CatalogHostname
 		}
 
 		setReadyCondition(&desired.Status.Conditions, rolesStatus)
@@ -314,6 +344,20 @@ func (r *InferenceServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// ServiceMonitorAvailable degradation exists to avoid.
 		b = b.Owns(&monitoringv1.ServiceMonitor{})
 	}
+	if r.AgentRouterAvailable {
+		// Same rule as above for the Agent Router catalog objects: with the
+		// CRDs served, their status writes (and external edits or deletions)
+		// must re-run the acceptance check of the owning service.
+		b = b.Owns(&aigwv1beta1.AIGatewayRoute{}).
+			Owns(&aigwv1beta1.AIServiceBackend{}).
+			Owns(&egv1alpha1.Backend{}).
+			Watches(&aigwv1beta1.AIGatewayRoute{},
+				handler.EnqueueRequestsFromMapFunc(r.enqueueForOwnedCatalogObject)).
+			Watches(&aigwv1beta1.AIServiceBackend{},
+				handler.EnqueueRequestsFromMapFunc(r.enqueueForOwnedCatalogObject)).
+			Watches(&egv1alpha1.Backend{},
+				handler.EnqueueRequestsFromMapFunc(r.enqueueForOwnedCatalogObject))
+	}
 	return b.
 		Watches(&aiv1alpha1.ModelVersion{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueReferencingServices)).
@@ -325,8 +369,6 @@ func (r *InferenceServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.enqueueForSourceCredentialsSecret)).
 		Watches(&leaderworkersetv1.LeaderWorkerSet{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueForOwnedLWS)).
-		Watches(&gatewayv1.HTTPRoute{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueForOwnedHTTPRoute)).
 		Complete(r)
 }
 
@@ -345,14 +387,12 @@ func (r *InferenceServiceReconciler) enqueueReferencingServices(ctx context.Cont
 	return r.referencingServices(ctx, indexKey, ref)
 }
 
-// enqueueForOwnedHTTPRoute maps an HTTPRoute to the InferenceService owning
-// it: gateway acceptance writes to the route status and external deletions or
-// edits must re-trigger the reconcile so RouteReady and the route object
-// recover promptly.
-func (r *InferenceServiceReconciler) enqueueForOwnedHTTPRoute(ctx context.Context, obj client.Object) []reconcile.Request {
-	route := obj.(*gatewayv1.HTTPRoute)
-	if owner := metav1.GetControllerOf(route); owner != nil && isInferenceServiceOwner(owner) {
-		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: route.Namespace, Name: owner.Name}}}
+// enqueueForOwnedCatalogObject maps a catalog object (Backend,
+// AIServiceBackend or AIGatewayRoute) to its owning InferenceService, so a
+// status write from the Agent Router controller re-runs the acceptance check.
+func (r *InferenceServiceReconciler) enqueueForOwnedCatalogObject(_ context.Context, obj client.Object) []reconcile.Request {
+	if owner := metav1.GetControllerOf(obj); owner != nil && isInferenceServiceOwner(owner) {
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: owner.Name}}}
 	}
 	return nil
 }
@@ -436,7 +476,7 @@ func (r *InferenceServiceReconciler) referencingServices(ctx context.Context, in
 const deprecatedLabelKey = "ai.cubestack.io/deprecated"
 
 // inferenceServiceKind is the Kind of the owner-reference lookups of the
-// owned-resource watches (LWS, HTTPRoute).
+// owned-resource watches (LWS and the Agent Router catalog objects).
 const inferenceServiceKind = "InferenceService"
 
 // setRenderedCondition sets the Rendered condition from the render outcome.

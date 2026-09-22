@@ -26,10 +26,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	aigwv1beta1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	aiv1alpha1 "github.com/suanova/cubestack/api/v1alpha1"
 )
 
-// testRouteWatchName is the owner-fixture name of the HTTPRoute mapFunc spec.
+// testRouteWatchName is the owner-fixture name of the catalog-object mapFunc
+// spec.
 const testRouteWatchName = "svc-route-watch"
 
 var _ = Describe("HTTPRoute CRD", func() {
@@ -58,14 +60,14 @@ var _ = Describe("HTTPRoute CRD", func() {
 	})
 })
 
-var _ = Describe("enqueueForOwnedHTTPRoute", func() {
-	It("maps an owned HTTPRoute to its InferenceService and ignores foreign ones", func() {
+var _ = Describe("enqueueForOwnedCatalogObject", func() {
+	It("maps an owned catalog object to its InferenceService and ignores foreign ones", func() {
 		owner := &aiv1alpha1.InferenceService{
 			ObjectMeta: metav1.ObjectMeta{Name: testRouteWatchName, Namespace: testNamespace},
 			Spec:       aiv1alpha1.InferenceServiceSpec{ModelRef: testModelRef, ProfileRef: "watch-prof"},
 		}
 		Expect(k8sClient.Create(ctx, owner)).To(Succeed())
-		route := &gatewayv1.HTTPRoute{
+		route := &aigwv1beta1.AIGatewayRoute{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "svc-route-watch-route",
 				Namespace: testNamespace,
@@ -76,7 +78,7 @@ var _ = Describe("enqueueForOwnedHTTPRoute", func() {
 			},
 		}
 		r := routeReconciler()
-		reqs := r.enqueueForOwnedHTTPRoute(ctx, route)
+		reqs := r.enqueueForOwnedCatalogObject(ctx, route)
 		Expect(reqs).To(Equal([]reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: testNamespace, Name: testRouteWatchName}}}))
 		// A controller owner of the same Kind from another API group must not
 		// be treated as one of our services.
@@ -86,6 +88,6 @@ var _ = Describe("enqueueForOwnedHTTPRoute", func() {
 			APIVersion: "other.example.io/v1", Kind: inferenceServiceKind,
 			Name: "svc-route-watch", UID: owner.UID, Controller: ptrTo(true),
 		}}
-		Expect(r.enqueueForOwnedHTTPRoute(ctx, foreign)).To(BeEmpty())
+		Expect(r.enqueueForOwnedCatalogObject(ctx, foreign)).To(BeEmpty())
 	})
 })

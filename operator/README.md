@@ -45,8 +45,9 @@ The kind cluster setup (`helm-e2e-setup`, a dependency of `helm-e2e-install`)
 installs the platform prerequisites the operator needs to run and reconcile
 before the chart is helm-installed:
 
-- the Gateway API CRDs (the manager registers a Gateway/HTTPRoute watch at
-  startup and will not boot without them), and
+- the Gateway API CRDs (the DevEnvironment controller watches Gateway,
+  HTTPRoute, TCPRoute, UDPRoute and ListenerSet; the manager registers those
+  watches at startup for the kinds the cluster serves), and
 - the upstream [LeaderWorkerSet](https://github.com/kubernetes-sigs/lws)
   controller at the version pinned in `go.mod` (LWS workloads do not
   materialize pods without it). The controller install applies the pinned lws
@@ -59,7 +60,9 @@ InferenceRuntimeProfile, InferenceService, DevEnvironment — synced from
 for the controller manager; it does not ship the lws CRDs.
 
 In a non-kind cluster you must provide both prerequisites before installing the
-chart.
+chart, and the Envoy Gateway v1.9.1 CRDs as well: the `ClientTrafficPolicy` that
+ships with the Gateway — from the chart, and from the kustomize base's
+`config/gateway/` — is one of that controller's resources.
 
 ## Uninstall and cleanup
 

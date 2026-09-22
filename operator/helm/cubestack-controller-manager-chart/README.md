@@ -82,6 +82,13 @@ controller prerequisite below.
   its own right, so an image mirrored globally is not guaranteed to reach a
   class that has one. Spelling it out works either way.
 
+- The **Agent Router** (`ai-gateway-controller` v1.1.0, namespace
+  `ai-gateway-system`) running in the cluster, which provides the
+  `AIGatewayRoute` / `AIServiceBackend` CRDs a published model catalog entry is
+  written into. The manager degrades without it instead of failing: a service
+  with `spec.route.publish: true` reports `RouteReady=False,
+  reason=AgentRouterUnavailable` and no catalog entry is created.
+
 - The **upstream LeaderWorkerSet controller** running in the cluster, which
   provides the `leaderworkerset.x-k8s.io` / `disaggregatedset.x-k8s.io` CRDs
   as well as the controller: the manifest below is the pinned lws module's
@@ -186,10 +193,12 @@ kubectl get gatewayclass eg -o jsonpath='{.spec.parametersRef}{"\n"}'
 kubectl -n envoy-gateway-system get envoyproxy
 ```
 
-### Gateway configuration (route publishing)
+### Gateway configuration (publishing)
 
-`spec.route.publish: true` on an InferenceService publishes its HTTPRoute to
-the platform Gateway. **The chart creates that Gateway**: `cubestack-gateway`,
+`spec.route.publish: true` on an InferenceService publishes it into the Agent
+Router model catalog: the catalog objects of the service attach to the platform
+Gateway, which serves the shared catalog hostname. **The chart creates that
+Gateway**: `cubestack-gateway`,
 with one HTTP listener on :80 that routes from any namespace may attach to and
 the `allowedListeners` opt-in the per-environment ListenerSets need (see the L4
 section). It lands in the **release namespace**, and the manager is told that
@@ -202,18 +211,28 @@ GatewayClass references (Prerequisites), which the platform owns and every
 Gateway of that class shares. That is deliberate: two Gateways of one class
 must not disagree about how their shared dataplane is exposed.
 
-`gateway.name` is the one value two readers have to agree on, so the chart
-feeds it to both: it names the Gateway object and the `--gateway-name` the
-manager receives. The DevEnvironment controller attaches its ListenerSets to
-that same Gateway, so renaming moves the object and both lookups together.
+One policy object ships with the Gateway: a `ClientTrafficPolicy`
+(`cubestack-gateway-ai`) that carries the connection buffer and HTTP/2
+flow-control windows the Agent Router's request translation needs — it buffers
+a whole request body to read the model name out of it, which the API's 32KiB
+default is too small for. It is created in the release namespace too, and its
+`targetRefs` follows `gateway.name` like the Gateway's own name does. Only the
+cluster's Envoy Gateway controller reads it (Prerequisites), so on a cluster
+without one it is inert.
+
+`gateway.name` is the one value several readers have to agree on, so the chart
+feeds it to all of them: it names the Gateway object, the `--gateway-name` the
+manager receives, and the `targetRefs` of that policy. The DevEnvironment
+controller attaches its ListenerSets to that same Gateway, so renaming moves
+the object and every lookup together.
 
 The values below do two different jobs, which is worth knowing when one of them
 seems to have no effect:
 
-- **Manager flags** — `name`, `domain`, `dataplaneNamespace`. An empty value
-  omits its flag entirely, keeping the manager's own default. The namespace is
-  the exception among them: it always renders, because this chart always
-  creates the Gateway it points at.
+- **Manager flags** — `name`, `catalogHostname`, `dataplaneNamespace`. An empty
+  value omits its flag entirely, keeping the manager's own default. The
+  namespace is the exception among them: it always renders, because this chart
+  always creates the Gateway it points at.
 - **A Gateway API field** — `className`, written into the Gateway object. The
   class it names is what decides the dataplane; the chart's `eg` default
   assumes the install under Prerequisites.
@@ -221,7 +240,7 @@ seems to have no effect:
 | Key | Manager flag | Default | Notes |
 |---|---|---|---|
 | `gateway.name` | `--gateway-name` | `cubestack-gateway` | Names the Gateway the chart creates, **and** the flag — so the object the operator publishes through is always the one the chart made. Empty = flag omitted; publishing is disabled (`RouteReady=False`, `GatewayNotConfigured`) while the object still takes the conventional name. |
-| `gateway.domain` | `--gateway-domain` | `""` | Empty = flag omitted. **Set this to enable publishing** — the public hostname of a published service is `<modelName>.<domain>`. |
+| `gateway.catalogHostname` | `--gateway-catalog-hostname` | `""` | Empty = flag omitted. **Set this to enable publishing**: the shared hostname the model catalog answers on. Every published service is one model of that single catalog entry, addressed by the model name in the request body. |
 | `gateway.dataplaneNamespace` | `--gateway-dataplane-namespace` | `envoy-gateway-system` | Names the namespace the Gateway's dataplane pods run in. **Not** a publishing switch. Two things read it: environment pods admit ingress from that Gateway, and the controller looks up the dataplane Service there to learn which port each listener is reachable on. Empty = flag omitted: environments stay default-deny inbound, and endpoint addresses fall back to assuming the listener port is the reachable one — true of a LoadBalancer or ClusterIP dataplane, not of a NodePort one. |
 | `gateway.className` | *(no flag)* | `eg` | The GatewayClass the Gateway asks to be served by. Not fed to the manager — only the cluster's Gateway controller reads it — so it must name a class that controller has established, and that carries the `EnvoyProxy` the cluster's dataplane needs (Prerequisites: Service type and proxy image). |
 
@@ -233,15 +252,15 @@ its own, separate from the one holding the `Gateway` object. Whether the port
 published for a listener is the listener's own port or the nodePort it was
 renumbered onto is decided by that class's `EnvoyProxy`, not by anything here.
 `name` reaches that controller too, as the Gateway its ListenerSets attach to;
-`className` is read only by the cluster, and `domain` configures the
+`className` is read only by the cluster, and `catalogHostname` configures the
 InferenceService publishing path only.
 
 The defaults are the platform convention — `cubestack-gateway`, served by the
-`eg` class — so a standard install only needs the domain:
+`eg` class — so a standard install only needs the catalog hostname:
 
 ```bash
 helm install cubestack ./helm/cubestack-controller-manager-chart -n cubestack-system \
-  --create-namespace --set gateway.domain=example.com
+  --create-namespace --set gateway.catalogHostname=ai.example.com
 ```
 
 Pass `--set` again on `helm upgrade` (or use a `--values` file) — the flags
@@ -259,10 +278,11 @@ programs it.
 
 The kustomize deployment (`make deploy`) carries the same `--gateway-name` /
 `--gateway-namespace` args in `operator/config/manager/manager.yaml`;
-`--gateway-domain` and `--gateway-dataplane-namespace` are left to your overlay
-there, so a kustomize install keeps environment pods default-deny inbound. It
-creates the same Gateway — `config/gateway/` is part of the kustomize base —
-and, like the chart, no `EnvoyProxy`: the class in
+`--gateway-catalog-hostname` and `--gateway-dataplane-namespace` are left to
+your overlay there, so a kustomize install keeps environment pods default-deny
+inbound and publishing off until a hostname is added. It creates the same
+Gateway and ClientTrafficPolicy — `config/gateway/` is part of the kustomize
+base — and, like the chart, no `EnvoyProxy`: the class in
 `operator/config/gateway/gateway.yaml` decides the dataplane. There the name
 and the GatewayClass are literals under `operator/config/`, not values.
 

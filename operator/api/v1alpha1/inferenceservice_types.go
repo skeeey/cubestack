@@ -22,26 +22,39 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// RouteSpec defines the public gateway route of the service.
+// RouteSpec defines the public gateway route of the service: the platform
+// model catalog entry a published service joins.
 type RouteSpec struct {
-	// Publish exposes the service through the gateway; defaults to false.
-	// Unpublished services only provide a ClusterIP internal endpoint.
+	// Publish exposes the service through the platform model catalog;
+	// defaults to false. Unpublished services only provide a ClusterIP
+	// internal endpoint.
 	// +optional
 	// +kubebuilder:default:=false
 	Publish bool `json:"publish,omitempty"`
 
-	// ModelName is the public model alias, used to generate the hostname
-	// <modelName>.<platform-domain>. It must be a single RFC1123 label.
+	// ModelName is the catalog model name: what clients send as the request
+	// body's "model" field. It is the platform-wide identity of a published
+	// service and must be unique among published services.
 	// +optional
-	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`
 	ModelName string `json:"modelName,omitempty"`
 
-	// TimeoutSeconds is the gateway request timeout; defaults to 60.
+	// TimeoutSeconds caps the total duration of a request at the gateway,
+	// including every streamed chunk. 0 (the default) disables the cap.
 	// +optional
-	// +kubebuilder:default:=60
-	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default:=0
+	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=86400
 	TimeoutSeconds *int64 `json:"timeoutSeconds,omitempty"`
+
+	// IdleTimeoutSeconds cuts a request whose upstream sent no bytes for this
+	// long; defaults to 300. Non-streaming generations send nothing until the
+	// response completes, so this bounds them too.
+	// +optional
+	// +kubebuilder:default:=300
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=86400
+	IdleTimeoutSeconds *int64 `json:"idleTimeoutSeconds,omitempty"`
 }
 
 // InferenceServiceSpec defines the desired state of InferenceService.

@@ -39,6 +39,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	aigwv1beta1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	aiv1alpha1 "github.com/suanova/cubestack/api/v1alpha1"
 	"github.com/suanova/cubestack/internal/controller"
@@ -58,6 +60,8 @@ func init() {
 	utilruntime.Must(leaderworkersetv1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
 	utilruntime.Must(monitoringv1.AddToScheme(scheme))
+	utilruntime.Must(aigwv1beta1.AddToScheme(scheme))
+	utilruntime.Must(egv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -71,21 +75,23 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
-	var gatewayDomain, gatewayName, gatewayNamespace, gatewayDataplaneNamespace string
+	var gatewayName, gatewayNamespace, gatewayDataplaneNamespace, gatewayCatalogHostname string
 	var l4PortRangeStart, l4PortRangeEnd int
 	var rdmaIBResource, rdmaRoCEResource string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
-	flag.StringVar(&gatewayDomain, "gateway-domain", "",
-		"Platform domain; the public hostname of a published InferenceService is <modelName>.<gateway-domain>.")
 	flag.StringVar(&gatewayName, "gateway-name", "",
-		"Name of the platform Gateway that published HTTPRoutes and DevEnvironment ListenerSets attach to.")
+		"Name of the platform Gateway that published model-catalog AIGatewayRoutes "+
+			"and DevEnvironment ListenerSets attach to.")
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "cubestack-system", "Namespace of the platform Gateway.")
 	flag.StringVar(&gatewayDataplaneNamespace, "gateway-dataplane-namespace", "",
 		"Namespace the platform Gateway's dataplane Service and pods run in; when set, DevEnvironment "+
 			"pods admit ingress from that Gateway, and published endpoints are addressed at the port "+
 			"its dataplane Service exposes them on. Leaving it empty keeps environments default-deny "+
 			"inbound, and addresses on their listener ports.")
+	flag.StringVar(&gatewayCatalogHostname, "gateway-catalog-hostname", "",
+		"Shared model-catalog hostname published InferenceServices attach to (Agent Router entry). "+
+			"Empty leaves publishing off (RouteReady=False, GatewayNotConfigured).")
 	flag.IntVar(&l4PortRangeStart, "l4-port-range-start", 20000,
 		"First port of the DevEnvironment L4 port pool. Each allocated port becomes a listener the "+
 			"environment's own ListenerSet declares on the platform Gateway.")
@@ -270,9 +276,18 @@ func main() {
 	if err = (&controller.InferenceServiceReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
-		GatewayDomain:    gatewayDomain,
 		GatewayName:      gatewayName,
 		GatewayNamespace: gatewayNamespace,
+		// The shared model-catalog hostname published services attach to.
+		// Empty leaves publishing off: the publish step reports
+		// RouteReady=False with reason GatewayNotConfigured instead.
+		CatalogHostname: gatewayCatalogHostname,
+		// Probe the Agent Router kinds once: where they are not served,
+		// publishing degrades to RouteReady=False with reason
+		// AgentRouterUnavailable instead of failing on an unknown kind. A
+		// cluster that installs the CRDs later needs an operator restart to
+		// pick them up.
+		AgentRouterAvailable: controller.AgentRouterAvailable(mgr.GetRESTMapper()),
 		// Probe the optional ServiceMonitor CRD once: where it is not served,
 		// the controller skips the scrape monitors instead of failing every
 		// InferenceService on an unknown kind. A cluster that installs the

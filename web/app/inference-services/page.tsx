@@ -547,20 +547,26 @@ function Kvs({ rows }: { rows: Array<[string, string]> }) {
 function EndpointsCard({ s }: { s: InferenceServiceSummary }) {
   const { t } = useI18n();
   const internal = s.internalEndpoint ?? "—";
-  // The public endpoint is the observed value the operator reports (the gateway
-  // host differs per cluster); fall back to "—" when it isn't published yet.
+  // The public endpoint is the observed value the operator reports (the shared
+  // catalog host differs per cluster); fall back to "—" when it isn't published
+  // yet. The catalog host serves every published model, so the model name that
+  // selects this service is shown alongside it.
   const external = s.publicEndpoint ?? "—";
   return (
     <Card title={t("inf.endpoints.title")}>
       <Box sx={{ px: "18px", py: "14px" }}>
         <EndpointRow label={t("inf.endpoints.internal")} value={internal} />
-        <EndpointRow label={t("inf.endpoints.public")} value={external} />
+        <EndpointRow
+          label={t("inf.endpoints.public")}
+          value={external}
+          hint={s.published && s.routeModelName ? t("inf.endpoints.publicModel", { model: s.routeModelName }) : undefined}
+        />
       </Box>
     </Card>
   );
 }
 
-function EndpointRow({ label, value }: { label: string; value: string }) {
+function EndpointRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   return (
@@ -583,6 +589,9 @@ function EndpointRow({ label, value }: { label: string; value: string }) {
           </Button>
         ) : null}
       </Box>
+      {hint ? (
+        <Typography sx={{ fontSize: 11.5, color: "text.secondary", mt: "6px" }}>{hint}</Typography>
+      ) : null}
     </Box>
   );
 }
@@ -823,7 +832,15 @@ function NumberInput({ value, min, max, onChange }: { value: number; min?: numbe
 
 function ParamsCard({ s }: { s: InferenceServiceSummary }) {
   const { t } = useI18n();
-  const timeout = s.timeoutSeconds === null ? "—" : `${s.timeoutSeconds}s`;
+  // timeoutSeconds 0 is the "no total-duration cap" default, not a zero-second
+  // budget; an absent field means the service predates the route contract.
+  const timeout =
+    s.timeoutSeconds === null
+      ? "—"
+      : s.timeoutSeconds === 0
+        ? t("inf.params.timeoutNone")
+        : `${s.timeoutSeconds}s`;
+  const idleTimeout = s.idleTimeoutSeconds === null ? "—" : `${s.idleTimeoutSeconds}s`;
   const maxLen = s.overrideNums.maxModelLen !== undefined ? String(s.overrideNums.maxModelLen) : "—";
   return (
     <Card title={t("inf.params.title")} meta={s.engine ?? "—"}>
@@ -836,6 +853,7 @@ function ParamsCard({ s }: { s: InferenceServiceSummary }) {
           ["profileRef", s.profileRef],
           [t("inf.params.route"), s.published ? `${t("inf.params.published")} ${s.routeModelName ?? ""}`.trim() : t("inf.params.unpublished")],
           [t("inf.params.timeout"), timeout],
+          [t("inf.params.idleTimeout"), idleTimeout],
           [t("inf.params.maxModelLen"), maxLen],
         ]}
       />
@@ -892,6 +910,7 @@ interface DeployDraft {
   publish: boolean;
   modelName: string;
   timeout: string; // keep as string until parse for a friendlier error path
+  idleTimeout: string; // idem; the operator defaults are 0 (no cap) and 300
 }
 
 type OverrideDecl = CreateOptionsResponse["profiles"][number]["overrides"][number];
@@ -917,7 +936,8 @@ function DeployWizard({
     overrides: {},
     publish: false,
     modelName: "",
-    timeout: "60",
+    timeout: "0",
+    idleTimeout: "300",
   });
   const [nameError, setNameError] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
@@ -996,13 +1016,19 @@ function DeployWizard({
     setCreateBusy(true);
     setCreateError(null);
     const timeout = parseInt(draft.timeout, 10);
+    const idleTimeout = parseInt(draft.idleTimeout, 10);
     const body = {
       namespace: draft.namespace,
       name: draft.name.trim(),
       profileRef: draft.profileRef,
       modelRef: draft.modelRef,
       overrides: draft.overrides,
-      route: { publish: draft.publish, modelName: draft.modelName.trim(), timeoutSeconds: Number.isFinite(timeout) ? timeout : 60 },
+      route: {
+        publish: draft.publish,
+        modelName: draft.modelName.trim(),
+        timeoutSeconds: Number.isFinite(timeout) ? timeout : 0,
+        idleTimeoutSeconds: Number.isFinite(idleTimeout) ? idleTimeout : 300,
+      },
     };
     fetch("/api/inferenceservices", {
       method: "POST",
@@ -1168,8 +1194,11 @@ function DeployWizard({
                       <WizField label={t("inf.deploy.modelName")} hint={t("inf.deploy.modelNameHint")}>
                         <TextField size="small" fullWidth value={draft.modelName} onChange={(e) => setField("modelName", e.target.value)} />
                       </WizField>
-                      <WizField label={t("inf.deploy.timeout")} hint="1–86400 s">
+                      <WizField label={t("inf.deploy.timeout")} hint="0–86400 s">
                         <TextField size="small" fullWidth type="number" value={draft.timeout} onChange={(e) => setField("timeout", e.target.value)} />
+                      </WizField>
+                      <WizField label={t("inf.deploy.idleTimeout")} hint="1–86400 s">
+                        <TextField size="small" fullWidth type="number" value={draft.idleTimeout} onChange={(e) => setField("idleTimeout", e.target.value)} />
                       </WizField>
                     </Box>
                   )}

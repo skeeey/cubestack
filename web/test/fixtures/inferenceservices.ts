@@ -14,7 +14,8 @@ export function inferenceServiceSummary(
     modelRef: "deepseek-v4-flash-w8a8-v1",
     published: true,
     routeModelName: "dsv4-flash",
-    timeoutSeconds: 60,
+    timeoutSeconds: 0,
+    idleTimeoutSeconds: 300,
     createdAt: "2026-09-01T06:12:00Z",
     engine: "sglang",
     engineVersion: "vendor-0.5.12-rc1",
@@ -48,9 +49,10 @@ export function inferenceServiceList(): InferenceServiceSummary[] {
       routeModelName: "dsv4-pro",
       modelRef: "deepseek-v4-pro-w8a8-v1",
       createdAt: "2026-09-01T07:55:53Z",
-      // The operator-reported public endpoint (a non-default host, to prove the
-      // page renders the observed value rather than a hardcoded gateway host).
-      publicEndpoint: "https://gw.prod.cubestack.example/v1/models/dsv4-pro",
+      // The operator-reported public endpoint: the shared model-catalog
+      // hostname, which serves every published model — the request body's
+      // `model` field picks one, so the URL carries no model path.
+      publicEndpoint: "https://ai.cubestack.dev",
     }),
     inferenceServiceSummary({}),
   ];
