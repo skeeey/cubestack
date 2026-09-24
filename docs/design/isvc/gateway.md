@@ -69,6 +69,37 @@
                                 注入 ext_proc 与 schema 翻译配置
   ```
 
+- **一个已发布请求的完整路径（实测）**：
+
+  ```
+  客户端
+    │  POST <协议路径，如 /v1/chat/completions 或 /anthropic/v1/messages>
+    │  Host: <catalogHostname>          ← 所有目录模型共用这一个入口
+    │  body: {"model": "<目录名>", ...}  ← 目录名 = spec.route.modelName
+    ▼
+  NodePort ──> Gateway 的 Envoy listener :80
+    │  ① Host 匹配：命中 Agent Router 从本服务 AIGatewayRoute 生成的那条 HTTPRoute
+    ▼
+  ② ext_proc（数据面 Pod 内的 sidecar，gRPC 双向流）
+    │   · 按客户端协议解析请求体，提取 model → 注入 x-ai-eg-model 请求头；
+    │     客户端协议 ≠ 后端 schema 时在此翻译请求体
+    ▼
+  ③ Envoy 按 x-ai-eg-model 匹配路由规则 → 选中该服务的 cluster
+    │   · cluster 由 AIServiceBackend → EG Backend 的 FQDN 得出：
+    │     <isvc>-<role>.<ns>.svc.cluster.local:<port>
+    │   · modelNameOverride：把请求体里的目录名改写成引擎 served name
+    ▼
+  ④ 上游：Service <isvc>-<role> → Pod（vLLM）
+    │   · timeoutSeconds → 总时长上限（默认 0 = 不设）；idleTimeoutSeconds → 无进展上限（默认 300s）
+    ▼
+  ⑤ ext_proc（响应阶段）
+    │   · 解析响应体提取 usage（流式需客户端带 stream_options.include_usage）
+    │   · 需要时把响应与流式事件翻译回客户端协议（如 Anthropic SSE）
+    │   · usage → token 限流/记账：执行链尚未部署，为后续增量
+    ▼
+  客户端收到响应（协议形状与其请求一致）
+  ```
+
 - **客户端协议与后端 schema 是两件事（实测）**：客户端协议由 controller 的
   `--endpointPrefixes=openai:,cohere:/cohere,anthropic:/anthropic` 决定——同一个目录 host 下
   `/v1/chat/completions`、`/v1/responses`、`/anthropic/v1/messages`（含流式 SSE）都可用；
